@@ -1,0 +1,33 @@
+[workspace]
+authors = ["Jacob H. Rothschild"]
+channels = ["conda-forge"]
+name = "gpt2-from-scratch"
+platforms = ["osx-arm64", "linux-64"]
+version = "0.1.0"
+
+[tasks]
+
+[system-requirements]
+cuda = "12.8"
+
+[dependencies]
+pixi-pycharm = ">=0.0.8,<0.0.9"
+tqdm = ">=4.67.1,<5"
+torchvision = ">=0.21.0,<0.22"
+matplotlib = "<3.10"
+ipython = ">=9.1.0,<10"
+tensorboard = ">=2.19.0,<3"
+tensordict = ">=0.1.2,<0.9"
+transformers = ">=4.51.3,<5"
+datasets = ">=3.5.0,<4"
+jupyter = ">=1.1.1,<2"
+jupytext = ">=1.17.1,<2"
+
+[target.linux-64.dependencies]
+pytorch-gpu = "*"
+
+[target.osx-arm64.dependencies]
+pytorch = ">=2.6.0,<3"
+
+[pypi-dependencies]
+huggingface-hub = { version = "*", extras = ["hf-xet"] }
