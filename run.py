@@ -1,5 +1,5 @@
 import gymnasium as gym
-env = gym.make('FrozenLake-v1', desc=None, map_name="4x4", is_slippery=False)
+env = gym.make('FrozenLake-v1', desc=None, map_name="4x4", is_slippery=False, render_mode='human')
 
 observation, info = env.reset()
 print(f"Starting observation: {observation}")

@@ -29,4 +29,4 @@ jupytext = ">=1.17.1,<2"
 #pytorch = ">=2.6.0,<3"
 
 [pypi-dependencies]
-gymnasium = { } #{ version = "*", extras = ["hf-xet"] }
+gymnasium = { extras = ["toy-text"] } #{ version = "*", extras = ["hf-xet"] }
