@@ -2,6 +2,7 @@
 import numpy as np
 import matplotlib.pyplot as plt
 from abc import ABC, abstractmethod
+from scipy.stats import norm
 
 
 class Agent(ABC):
@@ -26,15 +27,21 @@ def multiarmed_bandit(
     n_episodes: int,
     agent: Agent,
 ) -> None:
-    name = str(type(agent))
+    name = type(agent).__name__
     true_values = np.random.default_rng(seed).standard_normal(size=n_arms)
 
     expected_rewards = []
+    cumulative_rewards = []
     for i in range(n_episodes):
         action = agent.act(seed + i)
         reward: float = np.random.default_rng(seed + i).normal(loc=true_values[action])  # noqa
         agent.update(action, reward)
         expected_rewards.append(true_values[action])
+        cumulative_rewards.append(
+            cumulative_rewards[-1] + reward
+            if len(cumulative_rewards) > 0
+            else reward
+        )
 
     print("=" * 40 + name + "=" * 40)
     print(f"True values: {[round(value, 3) for value in true_values]}")
@@ -48,6 +55,14 @@ def multiarmed_bandit(
     plt.show()
     plt.clf()
 
+    plt.plot(cumulative_rewards)
+    plt.xlabel("Episode")
+    plt.ylabel("Cumulative reward")
+    plt.title(name)
+    plt.grid()
+    plt.show()
+    plt.clf()
+
 
 def greedy_action(values: np.ndarray, random_state):
     greedy_actions = np.nonzero(values == values.max())[0]
@@ -56,11 +71,10 @@ def greedy_action(values: np.ndarray, random_state):
 
 n_arms = 10
 seed = 42
-n_episodes = 10 ** 5
+n_episodes = 10 ** 4
 lr = 0.01
 
 # %%
-# Naive greedy
 class NaiveGreedyAgent(Agent):
     def __init__(self, n_arms: int, lr: float):
         self.estimated_values = np.zeros((n_arms,))
@@ -78,4 +92,24 @@ multiarmed_bandit(
     seed=seed,
     n_episodes=n_episodes,
     agent=NaiveGreedyAgent(n_arms=n_arms, lr=lr),
+)
+
+# %%
+class OptimisticGreedyAgent(Agent):
+    def __init__(self, n_arms: int, lr: float):
+        self.estimated_values = np.zeros((n_arms,)) + norm.ppf(0.99)
+        self.lr = lr
+
+    def act(self, random_state):
+        return greedy_action(values=self.estimated_values, random_state=random_state)
+
+    def update(self, action: int, reward: float):
+        self.estimated_values[action] += self.lr * (reward - self.estimated_values[action])
+
+
+multiarmed_bandit(
+    n_arms=n_arms,
+    seed=seed,
+    n_episodes=n_episodes,
+    agent=OptimisticGreedyAgent(n_arms=n_arms, lr=lr),
 )
