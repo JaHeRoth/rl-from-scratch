@@ -1,30 +1,56 @@
-# %%
 import numpy as np
 import matplotlib.pyplot as plt
+
+
+def greedy_action(values: np.ndarray, random_state):
+    greedy_actions = np.nonzero(values == values.max())[0]
+    return np.random.default_rng(random_state).choice(greedy_actions)
+
+
+class Agent:
+    estimated_values: np.ndarray
+
+    def __init__(self, n_arms: int, lr: float):
+        raise NotImplementedError
+
+    def act(self, random_state):
+        raise NotImplementedError
+
+    def update(self, action: int, reward: float):
+        raise NotImplementedError
+
+
+class NaiveGreedyAgent(Agent):
+    def __init__(self, n_arms: int, lr: float):
+        self.estimated_values = np.zeros((n_arms,))
+        self.lr = lr
+
+    def act(self, random_state):
+        return greedy_action(values=self.estimated_values, random_state=random_state)
+
+    def update(self, action: int, reward: float):
+        self.estimated_values[action] += self.lr * (reward - self.estimated_values[action])
 
 
 def multiarmed_bandit(
     n_arms: int,
     seed: int,
     n_episodes: int,
-    init_func: callable,
-    action_func: callable,
-    update_func: callable,
-    name: str,
+    agent: Agent,
 ) -> None:
+    name = str(type(agent))
     true_values = np.random.default_rng(seed).standard_normal(size=n_arms)
 
-    estimated_values = init_func(n_arms)
     expected_rewards = []
     for i in range(n_episodes):
-        action = action_func(estimated_values, seed + i)
+        action = agent.act(seed + i)
         reward = np.random.default_rng(seed + i).normal(loc=true_values[action])
-        estimated_values = update_func(estimated_values, action, reward)
+        agent.update(action, reward)
         expected_rewards.append(true_values[action])
 
     print("=" * 40 + name + "=" * 40)
     print(f"True values: {[round(value, 3) for value in true_values]}")
-    print(f"Estimated values: {[round(value, 3) for value in estimated_values]}")
+    print(f"Estimated values: {[round(value, 3) for value in agent.estimated_values]}")
 
     plt.plot(expected_rewards)
     plt.xlabel("Episode")
@@ -35,12 +61,6 @@ def multiarmed_bandit(
     plt.clf()
 
 
-def greedy_action(values: np.ndarray, random_state):
-    greedy_actions = np.nonzero(values == values.max())[0]
-    return np.random.default_rng(random_state).choice(greedy_actions)
-
-
-# %%
 n_arms = 10
 seed = 42
 n_episodes = 10 ** 5
@@ -51,8 +71,5 @@ multiarmed_bandit(
     n_arms=n_arms,
     seed=seed,
     n_episodes=n_episodes,
-    init_func=lambda n_arms: np.zeros((n_arms,)),
-    action_func=greedy_action,
-    update_func=lambda estimates, action, reward: estimates[action] + lr * (reward - estimates[action]),
-    name="Naive greedy",
+    agent=NaiveGreedyAgent(n_arms=n_arms, lr=lr),
 )
