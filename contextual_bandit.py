@@ -1,35 +1,23 @@
+# %%
 import numpy as np
 import matplotlib.pyplot as plt
+from abc import ABC, abstractmethod
 
 
-def greedy_action(values: np.ndarray, random_state):
-    greedy_actions = np.nonzero(values == values.max())[0]
-    return np.random.default_rng(random_state).choice(greedy_actions)
-
-
-class Agent:
+class Agent(ABC):
     estimated_values: np.ndarray
 
-    def __init__(self, n_arms: int, lr: float):
-        raise NotImplementedError
+    @abstractmethod
+    def __init__(self):
+        ...
 
-    def act(self, random_state):
-        raise NotImplementedError
+    @abstractmethod
+    def act(self, random_state) -> int:
+        ...
 
-    def update(self, action: int, reward: float):
-        raise NotImplementedError
-
-
-class NaiveGreedyAgent(Agent):
-    def __init__(self, n_arms: int, lr: float):
-        self.estimated_values = np.zeros((n_arms,))
-        self.lr = lr
-
-    def act(self, random_state):
-        return greedy_action(values=self.estimated_values, random_state=random_state)
-
-    def update(self, action: int, reward: float):
-        self.estimated_values[action] += self.lr * (reward - self.estimated_values[action])
+    @abstractmethod
+    def update(self, action: int, reward: float) -> None:
+        ...
 
 
 def multiarmed_bandit(
@@ -44,7 +32,7 @@ def multiarmed_bandit(
     expected_rewards = []
     for i in range(n_episodes):
         action = agent.act(seed + i)
-        reward = np.random.default_rng(seed + i).normal(loc=true_values[action])
+        reward: float = np.random.default_rng(seed + i).normal(loc=true_values[action])  # noqa
         agent.update(action, reward)
         expected_rewards.append(true_values[action])
 
@@ -61,12 +49,30 @@ def multiarmed_bandit(
     plt.clf()
 
 
+def greedy_action(values: np.ndarray, random_state):
+    greedy_actions = np.nonzero(values == values.max())[0]
+    return np.random.default_rng(random_state).choice(greedy_actions)
+
+
 n_arms = 10
 seed = 42
 n_episodes = 10 ** 5
 lr = 0.01
 
+# %%
 # Naive greedy
+class NaiveGreedyAgent(Agent):
+    def __init__(self, n_arms: int, lr: float):
+        self.estimated_values = np.zeros((n_arms,))
+        self.lr = lr
+
+    def act(self, random_state):
+        return greedy_action(values=self.estimated_values, random_state=random_state)
+
+    def update(self, action: int, reward: float):
+        self.estimated_values[action] += self.lr * (reward - self.estimated_values[action])
+
+
 multiarmed_bandit(
     n_arms=n_arms,
     seed=seed,
