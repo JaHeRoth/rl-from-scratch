@@ -71,7 +71,6 @@ def greedy_action(values: np.ndarray, random_state):
 
 n_arms = 10
 seed = 42
-n_episodes = 10 ** 4
 lr = 0.01
 
 # %%
@@ -90,7 +89,7 @@ class NaiveGreedyAgent(Agent):
 multiarmed_bandit(
     n_arms=n_arms,
     seed=seed,
-    n_episodes=n_episodes,
+    n_episodes=10 ** 4,
     agent=NaiveGreedyAgent(n_arms=n_arms, lr=lr),
 )
 
@@ -110,23 +109,22 @@ class OptimisticGreedyAgent(Agent):
 multiarmed_bandit(
     n_arms=n_arms,
     seed=seed,
-    n_episodes=n_episodes,
+    n_episodes=10 ** 4,
     agent=OptimisticGreedyAgent(n_arms=n_arms, lr=lr),
 )
 
 # %%
-eps = 0.01
-
 class EpsGreedyAgent(Agent):
-    def __init__(self, n_arms: int, lr: float):
+    def __init__(self, n_arms: int, lr: float, eps: float):
         self.estimated_values = np.zeros((n_arms,))
         self.lr = lr
+        self.eps = eps
 
     def act(self, random_state):
         rng = np.random.default_rng(random_state)
         return (
             greedy_action(values=self.estimated_values, random_state=random_state)
-            if rng.uniform() > eps
+            if rng.uniform() > self.eps
             else rng.integers(len(self.estimated_values))
         )
 
@@ -137,6 +135,34 @@ class EpsGreedyAgent(Agent):
 multiarmed_bandit(
     n_arms=n_arms,
     seed=seed,
-    n_episodes=n_episodes,
-    agent=EpsGreedyAgent(n_arms=n_arms, lr=lr),
+    n_episodes=10 ** 4,
+    agent=EpsGreedyAgent(n_arms=n_arms, lr=lr, eps=0.01),
+)
+
+# %%
+class UCBAgent(Agent):
+    def __init__(self, n_arms: int, lr: float, c: float):
+        self.estimated_values = np.zeros((n_arms,))
+        self.num_updates = np.zeros((n_arms,))
+        self.total_updates = 0
+        self.lr = lr
+        self.c = c
+
+    def act(self, random_state):
+        if self.num_updates.min() == 0:
+            return np.argmin(self.num_updates)
+
+        ucb_values = self.estimated_values + self.c * np.sqrt(np.log(self.num_updates.sum()) / self.num_updates)
+        return greedy_action(values=ucb_values, random_state=random_state)
+
+    def update(self, action: int, reward: float):
+        self.num_updates[action] += 1
+        self.estimated_values[action] += self.lr * (reward - self.estimated_values[action])
+
+
+multiarmed_bandit(
+    n_arms=n_arms,
+    seed=seed,
+    n_episodes=2 * 10 ** 5,
+    agent=UCBAgent(n_arms=n_arms, lr=lr, c=100),
 )
