@@ -76,7 +76,7 @@ lr = 0.01
 # %%
 class NaiveGreedyAgent(Agent):
     def __init__(self, n_arms: int, lr: float):
-        self.estimates = np.zeros((n_arms,))
+        self.estimates = np.zeros(n_arms)
         self.lr = lr
 
     def act(self, random_state):
@@ -96,7 +96,7 @@ multiarmed_bandit(
 # %%
 class OptimisticGreedyAgent(Agent):
     def __init__(self, n_arms: int, lr: float):
-        self.estimates = np.zeros((n_arms,)) + norm.ppf(0.99)
+        self.estimates = np.zeros(n_arms) + norm.ppf(0.99)
         self.lr = lr
 
     def act(self, random_state):
@@ -116,7 +116,7 @@ multiarmed_bandit(
 # %%
 class EpsGreedyAgent(Agent):
     def __init__(self, n_arms: int, lr: float, eps: float):
-        self.estimates = np.zeros((n_arms,))
+        self.estimates = np.zeros(n_arms)
         self.lr = lr
         self.eps = eps
 
@@ -142,8 +142,8 @@ multiarmed_bandit(
 # %%
 class UCBAgent(Agent):
     def __init__(self, n_arms: int, lr: float, c: float):
-        self.estimates = np.zeros((n_arms,))
-        self.num_updates = np.zeros((n_arms,))
+        self.estimates = np.zeros(n_arms)
+        self.num_updates = np.zeros(n_arms)
         self.total_updates = 0
         self.lr = lr
         self.c = c
@@ -170,8 +170,8 @@ multiarmed_bandit(
 # %%
 class PolicyGradientAgent(Agent):
     def __init__(self, n_arms: int, lr: float):
-        self.estimates = np.zeros((n_arms,))
-        self.num_updates = 0
+        self.estimates = np.zeros(n_arms)
+        self.avg_reward = None
         self.lr = lr
 
     @staticmethod
@@ -182,17 +182,26 @@ class PolicyGradientAgent(Agent):
     def act(self, random_state):
         return np.random.default_rng(random_state).choice(
             np.arange(len(self.estimates)),
-            p=self._softmax(self.estimates * np.log(self.num_updates + 1)),
+            p=self.probits,
         )
 
     def update(self, action: int, reward: float):
-        self.num_updates += 1
-        self.estimates[action] += self.lr * (reward - self.estimates[action])
+        avg_reward = (
+            self.avg_reward
+            if self.avg_reward is not None
+            else 0
+        )
+        self.estimates -= self.lr * (reward - avg_reward) * self.probits
+        self.estimates[action] += self.lr * (reward - avg_reward)
+
+    @property
+    def probits(self):
+        return self._softmax(self.estimates)
 
 
 multiarmed_bandit(
     n_arms=n_arms,
     seed=seed,
-    n_episodes=10 ** 3,
+    n_episodes=3 * 10 ** 3,
     agent=PolicyGradientAgent(n_arms=n_arms, lr=lr),
 )
