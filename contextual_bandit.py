@@ -113,3 +113,30 @@ multiarmed_bandit(
     n_episodes=n_episodes,
     agent=OptimisticGreedyAgent(n_arms=n_arms, lr=lr),
 )
+
+# %%
+eps = 0.01
+
+class EpsGreedyAgent(Agent):
+    def __init__(self, n_arms: int, lr: float):
+        self.estimated_values = np.zeros((n_arms,))
+        self.lr = lr
+
+    def act(self, random_state):
+        rng = np.random.default_rng(random_state)
+        return (
+            greedy_action(values=self.estimated_values, random_state=random_state)
+            if rng.uniform() > eps
+            else rng.integers(len(self.estimated_values))
+        )
+
+    def update(self, action: int, reward: float):
+        self.estimated_values[action] += self.lr * (reward - self.estimated_values[action])
+
+
+multiarmed_bandit(
+    n_arms=n_arms,
+    seed=seed,
+    n_episodes=n_episodes,
+    agent=EpsGreedyAgent(n_arms=n_arms, lr=lr),
+)
