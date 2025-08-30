@@ -14,12 +14,12 @@ def multiarmed_bandit(
 ) -> None:
     true_values = np.random.default_rng(seed).standard_normal(size=n_arms)
 
-    estimated_values = np.zeros((n_arms,))
+    estimated_values = init_func(n_arms)
     expected_rewards = []
     for i in range(n_episodes):
-        action = greedy_action(estimated_values, seed + i)
+        action = action_func(estimated_values, seed + i)
         reward = np.random.default_rng(seed + i).normal(loc=true_values[action])
-        estimated_values[action] += lr * (reward - estimated_values[action])
+        estimated_values = update_func(estimated_values, action, reward)
         expected_rewards.append(true_values[action])
 
     print("=" * 40 + name + "=" * 40)
