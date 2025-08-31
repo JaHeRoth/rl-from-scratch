@@ -1,7 +1,10 @@
 # %%
+from typing import Iterable
+
 import numpy as np
 from tqdm import tqdm
 
+# TODO: Do this with dataframe, to avoid all the zips
 model = {
     (0, 0): (0.0, 0, False), (0, 1): (0.0, 4, False), (0, 2): (0.0, 1, False), (0, 3): (0.0, 0, False),
     (1, 0): (0.0, 0, False), (1, 1): (0.0, 5, True), (1, 2): (0.0, 2, False), (1, 3): (0.0, 1, False),
@@ -85,3 +88,69 @@ b = np.array(b)
 # print(
 #     np.linalg.solve(A, b)
 # )
+
+# %%
+# Policy iteration
+gamma = 0.9
+state_space = list(range(16))
+action_space = list(range(4))
+
+v = np.zeros(len(state_space))
+policy = lambda s: np.ones(len(action_space)) / len(action_space)
+
+
+def bellman_equation(
+    state: int, policy: callable, gamma: float, v: np.ndarray, action_space: Iterable, model: dict
+) -> float:
+    try:
+        target = 0.0
+        for action in action_space:
+            target += policy(state)[action] * (model[(state, action)][0] + gamma * v[model[(state, action)][1]])
+        return target
+    except KeyError:
+        return 0.0  # Nothing is recorded in model for terminal states, since we always reset upon reaching these
+
+
+def policy_evaluation(
+    v: np.ndarray, policy: callable, gamma: float, action_space: list, required_delta: float, model
+) -> np.ndarray:
+    out_v = v.copy()
+    max_delta = np.inf
+    while max_delta >= required_delta:
+        max_delta = 0.0
+        for state in state_space:
+            new_state_v = bellman_equation(state, policy, gamma, out_v, action_space, model)
+            max_delta = max(max_delta, np.abs(new_state_v - out_v[state]))
+            out_v[state] = new_state_v
+    return out_v
+
+
+def policy_improvement(v: np.ndarray, gamma: float, action_space: list, model: dict):
+    all_rewards = {}
+    all_next_states = {}
+    for state in state_space:
+        try:
+            all_rewards[state] = np.array([model[(state, action)][0] for action in action_space])
+            all_next_states[state] = np.array([model[(state, action)][1] for action in action_space])
+        except KeyError:
+            all_rewards[state] = np.zeros_like(action_space)
+            all_next_states[state] = np.ones_like(action_space) * state
+
+    def greedy_policy(state: int):
+        action_indices = np.arange(len(action_space))
+        action_returns = all_rewards[state] + gamma * v[all_next_states[state]]
+        return (action_indices == np.argmax(action_returns)).astype(float)
+
+    return greedy_policy
+
+
+while True:
+    old_v = v.copy()
+    v = policy_evaluation(v, policy, gamma, action_space, required_delta=10 ** -5, model=model)
+    policy = policy_improvement(v, gamma, action_space, model)
+    if (v == old_v).all():
+        print(v)
+        for state in state_space:
+            print(policy(state))
+        print([int(np.argmax(policy(state))) for state in state_space])
+        break
