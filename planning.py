@@ -63,7 +63,7 @@ def get_coefficients(state: int):
         rewards, next_states, _ = zip(*[model[(state, action)] for action in action_space])
         A_row = np.zeros(len(state_space) + 1)
         A_row[state] = 1.0
-        A_row[np.array(next_states)] -= gamma
+        A_row[np.array(next_states)] -= gamma * policy(state)
         A_row[-1] = policy(state) @ np.array(rewards)
         return A_row
     except KeyError:
