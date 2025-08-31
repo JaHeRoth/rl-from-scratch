@@ -54,3 +54,17 @@ while max_delta >= required_delta:
 
 for state in state_space:
     print(f"v({state}) = {v[state]:.3f}")
+
+
+# %%
+# Policy evaluation by solving system of equations
+def bellman_equation(state: int):
+    try:
+        rewards, next_states, _ = zip(*[model[(state, action)] for action in action_space])
+        return policy(state) @ (np.array(rewards) + gamma * v[np.array(next_states)])
+    except KeyError:
+        return 0.0  # Nothing is recorded in model for terminal states, since we always reset upon reaching these
+
+
+for state in state_space:
+    print(f"v({state}) = {bellman_equation(state)}")
