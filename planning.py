@@ -58,13 +58,30 @@ for state in state_space:
 
 # %%
 # Policy evaluation by solving system of equations
-def bellman_equation(state: int):
+def get_coefficients(state: int):
     try:
         rewards, next_states, _ = zip(*[model[(state, action)] for action in action_space])
-        return policy(state) @ (np.array(rewards) + gamma * v[np.array(next_states)])
+        A_row = np.zeros(len(state_space) + 1)
+        A_row[state] = 1.0
+        A_row[np.array(next_states)] -= gamma
+        A_row[-1] = policy(state) @ np.array(rewards)
+        return A_row
     except KeyError:
-        return 0.0  # Nothing is recorded in model for terminal states, since we always reset upon reaching these
+        # Hit for terminal states, since we always reset upon reaching these, thus don't record r, s' for these in model
+        return np.zeros(len(state_space) + 1)
+
+A = np.array(
+    [
+        get_coefficients(state)
+        for state in state_space
+    ]
+)
+b = np.concatenate((v, np.ones(1)))
+
+print(A)
+print(b)
+print(A @ b)
 
 
 for state in state_space:
-    print(f"v({state}) = {bellman_equation(state)}")
+    print(f"v({state}) = {A[state] @ b}")
