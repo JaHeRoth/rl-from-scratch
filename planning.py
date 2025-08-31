@@ -61,27 +61,27 @@ for state in state_space:
 def get_coefficients(state: int):
     try:
         rewards, next_states, _ = zip(*[model[(state, action)] for action in action_space])
-        A_row = np.zeros(len(state_space) + 1)
+
+        A_row = np.zeros_like(v)
         A_row[state] = 1.0
         A_row[np.array(next_states)] -= gamma * policy(state)
-        A_row[-1] = policy(state) @ np.array(rewards)
-        return A_row
+
+        b_cell = policy(state) @ np.array(rewards)
+        return A_row, b_cell
     except KeyError:
         # Hit for terminal states, since we always reset upon reaching these, thus don't record r, s' for these in model
-        return np.zeros(len(state_space) + 1)
+        return np.zeros_like(v), 0.0
 
-A = np.array(
-    [
+A, b = zip(
+    *[
         get_coefficients(state)
         for state in state_space
     ]
 )
-b = np.concatenate((v, np.ones(1)))
+A = np.array(A)
+b = np.array(b)
 
-print(A)
-print(b)
-print(A @ b)
-
-
-for state in state_space:
-    print(f"v({state}) = {A[state] @ b}")
+# Fails because A is singular, which happens due to identical states (all the terminal states behave identically)
+# print(
+#     np.linalg.solve(A, b)
+# )
