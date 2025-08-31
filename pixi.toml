@@ -20,6 +20,7 @@ ipython = ">=9.1.0,<10"
 #tensordict = ">=0.1.2,<0.9"
 jupyter = ">=1.1.1,<2"
 jupytext = ">=1.17.1,<2"
+scipy = ">=1.16.1,<2"
 #gymnasium = ">=0.26.3,<0.27"
 
 [target.linux-64.dependencies]
