@@ -1,3 +1,7 @@
+# %%
+import numpy as np
+from tqdm import tqdm
+
 model = {
     (0, 0): (0.0, 0, False), (0, 1): (0.0, 4, False), (0, 2): (0.0, 1, False), (0, 3): (0.0, 0, False),
     (1, 0): (0.0, 0, False), (1, 1): (0.0, 5, True), (1, 2): (0.0, 2, False), (1, 3): (0.0, 1, False),
@@ -12,7 +16,6 @@ model = {
     (14, 0): (0.0, 13, False), (14, 1): (0.0, 14, False), (14, 2): (1.0, 15, True), (14, 3): (0.0, 10, False),
 }
 
-import numpy as np
 
 gamma = 0.9
 state_space = list(range(16))
@@ -34,3 +37,20 @@ def bellman_equation(state: int):
 
 for state in state_space:
     print(f"v({state}) = {bellman_equation(state)}")
+
+
+# %%
+# (Async) policy evaluation using DP
+required_delta = 10 ** -5
+
+max_delta = np.inf
+while max_delta >= required_delta:
+    max_delta = 0.0
+    for state in state_space:
+        new_state_v = bellman_equation(state)
+        max_delta = max(max_delta, np.abs(new_state_v - v[state]))
+        v[state] = new_state_v
+
+
+for state in state_space:
+    print(f"v({state}) = {v[state]:.3f}")
