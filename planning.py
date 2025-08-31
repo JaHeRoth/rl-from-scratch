@@ -11,3 +11,26 @@ model = {
     (13, 0): (0.0, 12, True), (13, 1): (0.0, 13, False), (13, 2): (0.0, 14, False), (13, 3): (0.0, 9, False),
     (14, 0): (0.0, 13, False), (14, 1): (0.0, 14, False), (14, 2): (1.0, 15, True), (14, 3): (0.0, 10, False),
 }
+
+import numpy as np
+
+gamma = 0.9
+state_space = list(range(16))
+action_space = list(range(4))
+
+v = np.zeros(len(state_space))
+policy = lambda s: np.ones(len(action_space)) / len(action_space)
+
+
+def bellman_equation(state: int):
+    try:
+        target = 0.0
+        for action in action_space:
+            target += policy(state)[action] * (model[(state, action)][0] + gamma * v[model[(state, action)][1]])
+        return target
+    except KeyError:
+        return 0.0  # Nothing is recorded in model for terminal states, since we always reset upon reaching these
+
+
+for state in state_space:
+    print(f"v({state}) = {bellman_equation(state)}")
