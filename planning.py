@@ -14,6 +14,7 @@ model = pl.DataFrame(
         for (a, outcomes) in state_action_dict.items()
         for (p, s_next, r, terminal) in outcomes
     ],
+    orient="row",
     schema={
         "state": pl.Int64,
         "action": pl.Int64,
@@ -21,13 +22,13 @@ model = pl.DataFrame(
         "next_state": pl.Int64,
         "reward": pl.Float64,
         "done": pl.Boolean,
-    }
+    },
 )
 
 
 gamma = 0.9
-state_space = list(range(16))
-action_space = list(range(4))
+state_space = model["state"].unique()
+action_space = model["action"].unique()
 
 v = np.zeros(len(state_space))
 policy = lambda s: np.ones(len(action_space)) / len(action_space)
