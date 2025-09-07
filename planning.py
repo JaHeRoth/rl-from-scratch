@@ -1,23 +1,28 @@
 # %%
 from typing import Iterable
 
-import numpy as np
 from tqdm import tqdm
+import numpy as np
+import polars as pl
+import gymnasium as gym
+env = gym.make('FrozenLake-v1', desc=None, map_name="4x4", is_slippery=True, render_mode='human')
 
-# TODO: Do this with dataframe, to avoid all the zips
-model = {
-    (0, 0): (0.0, 0, False), (0, 1): (0.0, 4, False), (0, 2): (0.0, 1, False), (0, 3): (0.0, 0, False),
-    (1, 0): (0.0, 0, False), (1, 1): (0.0, 5, True), (1, 2): (0.0, 2, False), (1, 3): (0.0, 1, False),
-    (2, 0): (0.0, 1, False), (2, 1): (0.0, 6, False), (2, 2): (0.0, 3, False), (2, 3): (0.0, 2, False),
-    (3, 0): (0.0, 2, False), (3, 1): (0.0, 7, True), (3, 2): (0.0, 3, False), (3, 3): (0.0, 3, False),
-    (4, 0): (0.0, 4, False), (4, 1): (0.0, 8, False), (4, 2): (0.0, 5, True), (4, 3): (0.0, 0, False),
-    (6, 0): (0.0, 5, True), (6, 1): (0.0, 10, False), (6, 2): (0.0, 7, True), (6, 3): (0.0, 2, False),
-    (8, 0): (0.0, 8, False), (8, 1): (0.0, 12, True), (8, 2): (0.0, 9, False), (8, 3): (0.0, 4, False),
-    (9, 0): (0.0, 8, False), (9, 1): (0.0, 13, False), (9, 2): (0.0, 10, False), (9, 3): (0.0, 5, True),
-    (10, 0): (0.0, 9, False), (10, 1): (0.0, 14, False), (10, 2): (0.0, 11, True), (10, 3): (0.0, 6, False),
-    (13, 0): (0.0, 12, True), (13, 1): (0.0, 13, False), (13, 2): (0.0, 14, False), (13, 3): (0.0, 9, False),
-    (14, 0): (0.0, 13, False), (14, 1): (0.0, 14, False), (14, 2): (1.0, 15, True), (14, 3): (0.0, 10, False),
-}
+model = pl.DataFrame(
+    [
+        [s, a, p, s_next, r, terminal]
+        for (s, state_action_dict) in env.unwrapped.P.items()
+        for (a, outcomes) in state_action_dict.items()
+        for (p, s_next, r, terminal) in outcomes
+    ],
+    schema={
+        "state": pl.Int64,
+        "action": pl.Int64,
+        "probability": pl.Float64,
+        "next_state": pl.Int64,
+        "reward": pl.Float64,
+        "done": pl.Boolean,
+    }
+)
 
 
 gamma = 0.9
@@ -32,7 +37,8 @@ def bellman_equation(state: int):
     try:
         target = 0.0
         for action in action_space:
-            target += policy(state)[action] * (model[(state, action)][0] + gamma * v[model[(state, action)][1]])
+            model_out = model.filter((pl.col(state) == state) & (pl.col(action) == action))
+            target += policy(state)[action] * (model_out["reward"].item() + gamma * v[model_out["next_state"].item()])
         return target
     except KeyError:
         return 0.0  # Nothing is recorded in model for terminal states, since we always reset upon reaching these
