@@ -31,8 +31,8 @@ gamma = 0.9
 state_space = model["state"].unique()
 action_space = model["action"].unique()
 
-v = model.group_by("state").agg(v=pl.lit(0.0)).sort("state")
-policy = model.group_by(["state", "action"]).agg(policy=pl.lit(1 / len(action_space))).sort(["state", "action"])
+v = model.group_by("state").agg(v=pl.lit(0.0))
+policy = model.group_by(["state", "action"]).agg(policy=pl.lit(1 / len(action_space)))
 
 
 def bellman_equation(
@@ -53,11 +53,10 @@ def bellman_equation(
                 * (pl.col("reward") + gamma * pl.col("v"))
             ).sum()
         )
-        .sort("state")
     )
 
 
-print(f"v = {bellman_equation(model, v, policy, state=None)}")
+print(f"v = {bellman_equation(model, v, policy, state=None).sort('state')}")
 for state in state_space:
     print(f"v({state}) = {bellman_equation(model, v, policy, state)['v'].item()}")
 
@@ -77,7 +76,7 @@ while max_delta >= required_delta:
     )
     v = v_new
 
-print(v)
+print(v.sort('state'))
 
 # %%
 # (Async) policy evaluation using DP
