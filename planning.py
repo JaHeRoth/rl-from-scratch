@@ -79,20 +79,30 @@ while max_delta >= required_delta:
 print(v.sort('state'))
 
 # %%
-# (Async) policy evaluation using DP
+# Async policy evaluation using DP
+# Note: Probably not very efficient, since polars dataframes are immutable,
+#  thus whole v dataframe must be copied on every state update
 required_delta = 10 ** -7
 
 max_delta = np.inf
 while max_delta >= required_delta:
     max_delta = 0.0
     for state in state_space:
-        new_state_v = bellman_equation(state)
-        max_delta = max(max_delta, np.abs(new_state_v - v[state]))
-        v[state] = new_state_v
+        new_state_v = bellman_equation(model, v, policy, state)["v"].item()
+        old_state_v = v.filter(pl.col("state") == state)["v"].item()
+        max_delta = max(max_delta, np.abs(new_state_v - old_state_v))
+        v = v.select(
+            "state",
+            v=(
+                pl.when(pl.col("state") == state)
+                .then(new_state_v)
+                .otherwise(pl.col("v"))
+            ),
+        )
 
 
 for state in state_space:
-    print(f"v({state}) = {v[state]:.3f}")
+    print(f"v({state}) = {v.filter(pl.col('state') == state)["v"].item():.3f}")
 
 
 # %%
