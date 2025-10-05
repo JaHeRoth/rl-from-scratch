@@ -30,20 +30,25 @@ gamma = 0.9
 state_space = model["state"].unique()
 action_space = model["action"].unique()
 
-v = np.zeros(len(state_space))
-policy = lambda s: np.ones(len(action_space)) / len(action_space)
+v = model.group_by("state").agg(v=pl.lit(0.0))
+policy = model.group_by(["state", "action"]).agg(policy=pl.lit(1 / len(action_space)))
 
 
 def bellman_equation(state: int):
-    try:
-        target = 0.0
-        for action in action_space:
-            model_out = model.filter((pl.col("state") == state) & (pl.col("action") == action))
-            # TODO: Handle multiple possible outcomes. Probably better to use DataFrames for v and policy so that we can join safely.
-            target += policy(state)[action] * (model_out["reward"].item() + gamma * v[model_out["next_state"].item()])
-        return target
-    except KeyError:
-        return 0.0  # Nothing is recorded in model for terminal states, since we always reset upon reaching these
+    return (
+        model
+        .filter(pl.col("state") == state)
+        .join(v, on="state")
+        .join(policy, on=["state", "action"])
+        .group_by("state")
+        .agg(
+            v=(
+                pl.col("policy")
+                * pl.col("probability")
+                * (pl.col("reward") + gamma * pl.col("v"))
+            ).sum()
+        )
+    )
 
 
 for state in state_space:
