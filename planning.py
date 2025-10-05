@@ -210,9 +210,6 @@ def policy_improvement(model: pl.DataFrame, v: pl.DataFrame, gamma: float) -> pl
 
 
 while True:
-    print(v.sort("state"))
-    print(policy.sort(["state", "action"]).pivot(on="action", index="state"))
-
     old_policy = policy
 
     v = policy_evaluation(model, v, policy, gamma, required_delta=10 ** -5)
@@ -228,5 +225,49 @@ while True:
 
 print(v.sort("state"))
 print(policy.sort(["state", "action"]).pivot(on="action", index="state"))
+
+# %%
+# (Synchronous) value iteration
+def bellman_optimality_equation(
+    model: pl.DataFrame, v: pl.DataFrame, gamma: float, state: int | None
+) -> pl.DataFrame:
+    if state is not None:
+        model = model.filter(pl.col("state") == state)
+
+    return (
+        model
+        .join(v, left_on="next_state", right_on="state")
+        .group_by(["state", "action"])
+        .agg(
+            q=(
+                pl.col("probability")
+                * (pl.col("reward") + gamma * pl.col("v"))
+            ).sum()
+        )
+        .group_by("state")
+        .agg(
+            v=pl.max("q")
+        )
+    )
+
+
+required_delta = 10 ** -10
+
+v = model.group_by("state").agg(v=pl.lit(0.0))
+max_delta = np.inf
+num_sweeps = 0
+while max_delta >= required_delta:
+    num_sweeps += 1
+    v_new = bellman_optimality_equation(model, v, gamma, state=None)
+    max_delta = (
+        v
+        .join(v_new, on="state", suffix="_new")
+        .select((pl.col("v_new") - pl.col("v")).abs().max())
+        .item()
+    )
+    v = v_new
+
+print(f"After {num_sweeps} sweeps:")
+print(v.sort('state'))
 
 # %%
