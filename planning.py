@@ -38,7 +38,8 @@ def bellman_equation(state: int):
     try:
         target = 0.0
         for action in action_space:
-            model_out = model.filter((pl.col(state) == state) & (pl.col(action) == action))
+            model_out = model.filter((pl.col("state") == state) & (pl.col("action") == action))
+            # TODO: Handle multiple possible outcomes. Probably better to use DataFrames for v and policy so that we can join safely.
             target += policy(state)[action] * (model_out["reward"].item() + gamma * v[model_out["next_state"].item()])
         return target
     except KeyError:
