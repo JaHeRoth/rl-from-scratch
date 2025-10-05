@@ -86,7 +86,7 @@ print(v.sort('state'))
 # Async policy evaluation using DP
 # Note: Probably not very efficient, since polars dataframes are immutable,
 #  thus whole v dataframe must be copied on every state update
-required_delta = 10 ** -7
+required_delta = 10 ** -10
 
 v = model.group_by("state").agg(v=pl.lit(0.0))
 max_delta = np.inf
