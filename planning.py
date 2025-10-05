@@ -65,8 +65,11 @@ for state in state_space:
 # Synchronous policy evaluation using DP
 required_delta = 10 ** -10
 
+v = model.group_by("state").agg(v=pl.lit(0.0))
 max_delta = np.inf
+num_sweeps = 0
 while max_delta >= required_delta:
+    num_sweeps += 1
     v_new = bellman_equation(model, v, policy, state=None)
     max_delta = (
         v
@@ -76,6 +79,7 @@ while max_delta >= required_delta:
     )
     v = v_new
 
+print(f"After {num_sweeps} sweeps:")
 print(v.sort('state'))
 
 # %%
@@ -84,8 +88,11 @@ print(v.sort('state'))
 #  thus whole v dataframe must be copied on every state update
 required_delta = 10 ** -7
 
+v = model.group_by("state").agg(v=pl.lit(0.0))
 max_delta = np.inf
+num_sweeps = 0
 while max_delta >= required_delta:
+    num_sweeps += 1
     max_delta = 0.0
     for state in state_space:
         new_state_v = bellman_equation(model, v, policy, state)["v"].item()
@@ -100,7 +107,7 @@ while max_delta >= required_delta:
             ),
         )
 
-
+print(f"After {num_sweeps} sweeps:")
 for state in state_space:
     print(f"v({state}) = {v.filter(pl.col('state') == state)["v"].item():.3f}")
 
