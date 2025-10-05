@@ -209,6 +209,7 @@ def policy_improvement(model: pl.DataFrame, v: pl.DataFrame, gamma: float) -> pl
     )
 
 
+num_updates = 0
 while True:
     old_policy = policy
 
@@ -222,7 +223,9 @@ while True:
     )
     if len(policy_deltas) == 0:
         break
+    num_updates += 1
 
+print(f"After {num_updates - 1} policy updates")
 print(v.sort("state"))
 print(policy.sort(["state", "action"]).pivot(on="action", index="state"))
 
@@ -266,6 +269,32 @@ while max_delta >= required_delta:
         .item()
     )
     v = v_new
+
+print(f"After {num_sweeps} sweeps:")
+print(v.sort('state'))
+
+# %%
+# Value iteration with prioritized sweeping
+required_delta = 10 ** -10
+
+v = model.group_by("state").agg(v=pl.lit(0.0))
+max_delta = np.inf
+num_sweeps = 0
+while max_delta >= required_delta:
+    num_sweeps += 1
+    max_delta = 0.0
+    for state in state_space:
+        new_state_v = bellman_optimality_equation(model, v, gamma, state)["v"].item()
+        old_state_v = v.filter(pl.col("state") == state)["v"].item()
+        max_delta = max(max_delta, np.abs(new_state_v - old_state_v))
+        v = v.select(
+            "state",
+            v=(
+                pl.when(pl.col("state") == state)
+                .then(new_state_v)
+                .otherwise(pl.col("v"))
+            ),
+        )
 
 print(f"After {num_sweeps} sweeps:")
 print(v.sort('state'))
