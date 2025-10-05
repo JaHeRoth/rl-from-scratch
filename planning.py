@@ -37,7 +37,7 @@ policy = model.group_by(["state", "action"]).agg(policy=pl.lit(1 / len(action_sp
 
 
 def bellman_equation(
-    model: pl.DataFrame, v: pl.DataFrame, policy: pl.DataFrame, state: int | None
+    model: pl.DataFrame, v: pl.DataFrame, policy: pl.DataFrame, gamma: float, state: int | None
 ) -> pl.DataFrame:
     if state is not None:
         model = model.filter(pl.col("state") == state)
@@ -57,9 +57,9 @@ def bellman_equation(
     )
 
 
-print(f"v = {bellman_equation(model, v, policy, state=None).sort('state')}")
+print(f"v = {bellman_equation(model, v, policy, gamma, state=None).sort('state')}")
 for state in state_space:
-    print(f"v({state}) = {bellman_equation(model, v, policy, state)['v'].item()}")
+    print(f"v({state}) = {bellman_equation(model, v, policy, gamma, state)['v'].item()}")
 
 
 # %%
@@ -71,7 +71,7 @@ max_delta = np.inf
 num_sweeps = 0
 while max_delta >= required_delta:
     num_sweeps += 1
-    v_new = bellman_equation(model, v, policy, state=None)
+    v_new = bellman_equation(model, v, policy, gamma, state=None)
     max_delta = (
         v
         .join(v_new, on="state", suffix="_new")
@@ -96,7 +96,7 @@ while max_delta >= required_delta:
     num_sweeps += 1
     max_delta = 0.0
     for state in state_space:
-        new_state_v = bellman_equation(model, v, policy, state)["v"].item()
+        new_state_v = bellman_equation(model, v, policy, gamma, state)["v"].item()
         old_state_v = v.filter(pl.col("state") == state)["v"].item()
         max_delta = max(max_delta, np.abs(new_state_v - old_state_v))
         v = v.select(
@@ -138,6 +138,7 @@ def get_coefficients():
         expected_reward.drop("state").to_numpy(),
     )
 
+
 A, b = get_coefficients()
 true_v = np.linalg.solve(A, b)
 
@@ -146,66 +147,86 @@ for i, state in enumerate(state_space):
 
 # %%
 # Policy iteration
-gamma = 0.9
-state_space = list(range(16))
-action_space = list(range(4))
-
-v = np.zeros(len(state_space))
-policy = lambda s: np.ones(len(action_space)) / len(action_space)
-
-
-def bellman_equation(
-    state: int, policy: callable, gamma: float, v: np.ndarray, action_space: Iterable, model: dict
-) -> float:
-    try:
-        target = 0.0
-        for action in action_space:
-            target += policy(state)[action] * (model[(state, action)][0] + gamma * v[model[(state, action)][1]])
-        return target
-    except KeyError:
-        return 0.0  # Nothing is recorded in model for terminal states, since we always reset upon reaching these
+v = model.group_by("state").agg(v=pl.lit(0.0))
+policy = model.group_by(["state", "action"]).agg(policy=pl.lit(1 / len(action_space)))
 
 
 def policy_evaluation(
-    v: np.ndarray, policy: callable, gamma: float, action_space: list, required_delta: float, model
-) -> np.ndarray:
-    out_v = v.copy()
+    model: pl.DataFrame, v: pl.DataFrame, policy: pl.DataFrame, gamma: float, required_delta: float
+) -> pl.DataFrame:
     max_delta = np.inf
     while max_delta >= required_delta:
-        max_delta = 0.0
-        for state in state_space:
-            new_state_v = bellman_equation(state, policy, gamma, out_v, action_space, model)
-            max_delta = max(max_delta, np.abs(new_state_v - out_v[state]))
-            out_v[state] = new_state_v
-    return out_v
+        v_new = bellman_equation(model, v, policy, gamma, state=None)
+        max_delta = (
+            v
+            .join(v_new, on="state", suffix="_new")
+            .select((pl.col("v_new") - pl.col("v")).abs().max())
+            .item()
+        )
+        v = v_new
+    return v
 
 
-def policy_improvement(v: np.ndarray, gamma: float, action_space: list, model: dict):
-    all_rewards = {}
-    all_next_states = {}
-    for state in state_space:
-        try:
-            all_rewards[state] = np.array([model[(state, action)][0] for action in action_space])
-            all_next_states[state] = np.array([model[(state, action)][1] for action in action_space])
-        except KeyError:
-            all_rewards[state] = np.zeros_like(action_space)
-            all_next_states[state] = np.ones_like(action_space) * state
-
-    def greedy_policy(state: int):
-        action_indices = np.arange(len(action_space))
-        action_returns = all_rewards[state] + gamma * v[all_next_states[state]]
-        return (action_indices == np.argmax(action_returns)).astype(float)
-
-    return greedy_policy
+def policy_improvement(model: pl.DataFrame, v: pl.DataFrame, gamma: float) -> pl.DataFrame:
+    q = (
+        model
+        .join(v, left_on="next_state", right_on="state")
+        .group_by(["state", "action"])
+        .agg(
+            q=(
+                pl.col("probability")
+                * (pl.col("reward") + gamma * pl.col("v"))
+            ).sum()
+        )
+    )
+    max_q_per_state = (
+        q
+        .group_by("state")
+        .agg(q=pl.max("q"))
+    )
+    greedy_choice = (
+        q
+        .join(max_q_per_state, on="state", suffix="_max")
+        .select(
+            "state",
+            "action",
+            greedy_choice=pl.col("q") == pl.col("q_max"),
+        )
+    )
+    num_greedy_choices = (
+        greedy_choice
+        .group_by("state")
+        .agg(num_greedy_choices=pl.sum("greedy_choice"))
+    )
+    return (
+        greedy_choice
+        .join(num_greedy_choices, on="state")
+        .select(
+            "state",
+            "action",
+            policy=pl.col("greedy_choice").cast(pl.Float64) / pl.col("num_greedy_choices"),
+        )
+    )
 
 
 while True:
-    old_v = v.copy()
-    v = policy_evaluation(v, policy, gamma, action_space, required_delta=10 ** -5, model=model)
-    policy = policy_improvement(v, gamma, action_space, model)
-    if (v == old_v).all():
-        print(v)
-        for state in state_space:
-            print(policy(state))
-        print([int(np.argmax(policy(state))) for state in state_space])
+    print(v.sort("state"))
+    print(policy.sort(["state", "action"]).pivot(on="action", index="state"))
+
+    old_policy = policy
+
+    v = policy_evaluation(model, v, policy, gamma, required_delta=10 ** -5)
+    policy = policy_improvement(model, v, gamma)
+
+    policy_deltas = (
+        policy
+        .join(old_policy, on=["state", "action"], suffix="_old")
+        .filter(pl.col("policy") != pl.col("policy_old"))
+    )
+    if len(policy_deltas) == 0:
         break
+
+print(v.sort("state"))
+print(policy.sort(["state", "action"]).pivot(on="action", index="state"))
+
+# %%
