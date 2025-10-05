@@ -7,6 +7,7 @@ import polars as pl
 import gymnasium as gym
 
 pl.Config.set_tbl_rows(50)
+pl.Config.set_tbl_cols(30)
 
 env = gym.make('FrozenLake-v1', desc=None, map_name="4x4", is_slippery=True, render_mode='human')
 model = pl.DataFrame(
@@ -114,33 +115,34 @@ for state in state_space:
 
 # %%
 # Policy evaluation by solving system of equations
-def get_coefficients(state: int):
-    try:
-        rewards, next_states, _ = zip(*[model[(state, action)] for action in action_space])
+def get_coefficients():
+    joined = model.join(policy, on=["state", "action"])
+    v_multiplier = (
+        joined
+        .group_by(["state", "next_state"])
+        .agg(coeff=-gamma * (pl.col("policy") * pl.col("probability")).sum())
+        .sort("next_state")
+        .pivot(on="next_state", index="state", values="coeff")
+        .sort("state")
+        .fill_null(0.0)
+    )
+    expected_reward = (
+        joined
+        .group_by("state")
+        .agg(expected_reward=(pl.col("policy") * pl.col("probability") * pl.col("reward")).sum())
+        .sort("state")
+    )
 
-        A_row = np.zeros_like(v)
-        A_row[state] = 1.0
-        A_row[np.array(next_states)] -= gamma * policy(state)
+    return (
+        v_multiplier.drop("state").to_numpy() + np.eye(len(state_space)),
+        expected_reward.drop("state").to_numpy(),
+    )
 
-        b_cell = policy(state) @ np.array(rewards)
-        return A_row, b_cell
-    except KeyError:
-        # Hit for terminal states, since we always reset upon reaching these, thus don't record r, s' for these in model
-        return np.zeros_like(v), 0.0
+A, b = get_coefficients()
+true_v = np.linalg.solve(A, b)
 
-A, b = zip(
-    *[
-        get_coefficients(state)
-        for state in state_space
-    ]
-)
-A = np.array(A)
-b = np.array(b)
-
-# Fails because A is singular, which happens due to identical states (all the terminal states behave identically)
-# print(
-#     np.linalg.solve(A, b)
-# )
+for i, state in enumerate(state_space):
+    print(f"v({state}) = {true_v[i, 0]:.3f}")
 
 # %%
 # Policy iteration
