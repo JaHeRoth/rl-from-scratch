@@ -275,19 +275,44 @@ print(v.sort('state'))
 
 # %%
 # Value iteration with prioritized sweeping
-from queue import PriorityQueue
+class UniquePriorityQueue:
+    items: list = []
+    priorities: list = []
+
+    # Simple implementation, probably more efficient to use bisect and skip sort
+    def put(self, item, priority):
+        if item not in self.items:
+            self.items.append(item)
+            self.priorities.append(priority)
+        elif self.priorities[item_idx := self.items.index(item)] < priority:
+            self.priorities[item_idx] = priority
+
+        order = np.argsort(self.priorities)
+        self.items = list(np.array(self.items)[order])
+        self.priorities = list(np.array(self.priorities)[order])
+
+        # self.priorities, self.items = zip(*sorted(zip(self.priorities, self.items)))
+
+
+    def pop(self):
+        self.priorities.pop()
+        return self.items.pop()
+
+    def __len__(self):
+        return len(self.items)
+
 
 required_delta = 10 ** -10
 
-pq = PriorityQueue()
+pq = UniquePriorityQueue()
 for state in state_space:
-    pq.put((-np.inf, state))
+    pq.put(item=state, priority=np.inf)
 
 v = model.group_by("state").agg(v=pl.lit(0.0))
 num_updates = 0
-while not pq.empty():
+while len(pq):
     num_updates += 1
-    state = pq.get()[1]
+    state = pq.pop()
 
     new_state_v = bellman_optimality_equation(model, v, gamma, state)["v"].item()
     old_state_v = v.filter(pl.col("state") == state)["v"].item()
@@ -295,7 +320,7 @@ while not pq.empty():
 
     if delta >= required_delta:
         for prev_state in model.filter(pl.col("next_state") == state)["state"].unique():
-            pq.put((-delta, prev_state))
+            pq.put(item=prev_state, priority=delta)
 
     v = v.select(
         "state",
