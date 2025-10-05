@@ -5,8 +5,10 @@ from tqdm import tqdm
 import numpy as np
 import polars as pl
 import gymnasium as gym
-env = gym.make('FrozenLake-v1', desc=None, map_name="4x4", is_slippery=True, render_mode='human')
 
+pl.Config.set_tbl_rows(50)
+
+env = gym.make('FrozenLake-v1', desc=None, map_name="4x4", is_slippery=True, render_mode='human')
 model = pl.DataFrame(
     [
         [s, a, p, s_next, r, terminal]
@@ -25,13 +27,12 @@ model = pl.DataFrame(
     },
 )
 
-
 gamma = 0.9
 state_space = model["state"].unique()
 action_space = model["action"].unique()
 
-v = model.group_by("state").agg(v=pl.lit(0.0))
-policy = model.group_by(["state", "action"]).agg(policy=pl.lit(1 / len(action_space)))
+v = model.group_by("state").agg(v=pl.lit(0.0)).sort("state")
+policy = model.group_by(["state", "action"]).agg(policy=pl.lit(1 / len(action_space))).sort(["state", "action"])
 
 
 def bellman_equation(
@@ -42,7 +43,7 @@ def bellman_equation(
 
     return (
         model
-        .join(v, on="state")
+        .join(v, left_on="next_state", right_on="state")
         .join(policy, on=["state", "action"])
         .group_by("state")
         .agg(
@@ -52,17 +53,35 @@ def bellman_equation(
                 * (pl.col("reward") + gamma * pl.col("v"))
             ).sum()
         )
+        .sort("state")
     )
 
 
 print(f"v = {bellman_equation(model, v, policy, state=None)}")
 for state in state_space:
-    print(f"v({state}) = {bellman_equation(model, v, policy, state)}")
+    print(f"v({state}) = {bellman_equation(model, v, policy, state)['v'].item()}")
 
 
 # %%
+# Synchronous policy evaluation using DP
+required_delta = 10 ** -10
+
+max_delta = np.inf
+while max_delta >= required_delta:
+    v_new = bellman_equation(model, v, policy, state=None)
+    max_delta = (
+        v
+        .join(v_new, on="state", suffix="_new")
+        .select((pl.col("v_new") - pl.col("v")).abs().max())
+        .item()
+    )
+    v = v_new
+
+print(v)
+
+# %%
 # (Async) policy evaluation using DP
-required_delta = 10 ** -5
+required_delta = 10 ** -7
 
 max_delta = np.inf
 while max_delta >= required_delta:
