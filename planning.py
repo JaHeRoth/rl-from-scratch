@@ -34,10 +34,14 @@ v = model.group_by("state").agg(v=pl.lit(0.0))
 policy = model.group_by(["state", "action"]).agg(policy=pl.lit(1 / len(action_space)))
 
 
-def bellman_equation(state: int):
+def bellman_equation(
+    model: pl.DataFrame, v: pl.DataFrame, policy: pl.DataFrame, state: int | None
+) -> pl.DataFrame:
+    if state is not None:
+        model = model.filter(pl.col("state") == state)
+
     return (
         model
-        .filter(pl.col("state") == state)
         .join(v, on="state")
         .join(policy, on=["state", "action"])
         .group_by("state")
@@ -51,8 +55,9 @@ def bellman_equation(state: int):
     )
 
 
+print(f"v = {bellman_equation(model, v, policy, state=None)}")
 for state in state_space:
-    print(f"v({state}) = {bellman_equation(state)}")
+    print(f"v({state}) = {bellman_equation(model, v, policy, state)}")
 
 
 # %%
