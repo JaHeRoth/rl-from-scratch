@@ -9,7 +9,7 @@ import gymnasium as gym
 pl.Config.set_tbl_rows(50)
 pl.Config.set_tbl_cols(30)
 
-env = gym.make('FrozenLake-v1', desc=None, map_name="4x4", is_slippery=True, render_mode='human')
+env = gym.make('FrozenLake-v1', desc=None, map_name="4x4", is_slippery=True)
 model = pl.DataFrame(
     [
         [s, a, p, s_next, r, terminal]
@@ -333,28 +333,73 @@ print(v.sort('state'))
 
 # %%
 # Real time value iteration
-required_delta = 10 ** -10
+def make_epsilon_greedy_policy(model: pl.DataFrame, v: pl.DataFrame, gamma: float, eps: float) -> pl.DataFrame:
+    return (
+        policy_improvement(model, v, gamma)
+        .with_columns(policy=pl.col("policy") * (1 - eps) + eps / model["action"].n_unique())
+    )
+
+
+def simulate_policy_step(
+    model: pl.DataFrame, policy: pl.DataFrame, state: int, seed: int | None = None
+) -> int:
+    relevant_policy = (
+        policy
+        .filter(pl.col("state") == state)
+        .sort("action")
+    )
+    action = np.random.default_rng(seed).choice(
+        relevant_policy["action"], p=relevant_policy["policy"]
+    )
+    relevant_model = (
+        model
+        .filter((pl.col("state") == state) & (pl.col("action") == action))
+        .sort("next_state")
+    )
+    next_state = np.random.default_rng(10 ** 10 + seed).choice(
+        relevant_model["next_state"], p=relevant_model["probability"]
+    )
+    return int(next_state)
+
+
+max_plateau_length = 1000
+seed = 42
+eps = 0.1
 
 v = model.group_by("state").agg(v=pl.lit(0.0))
-max_delta = np.inf
-num_sweeps = 0
-while max_delta >= required_delta:
-    num_sweeps += 1
-    max_delta = 0.0
-    for state in state_space:
-        new_state_v = bellman_optimality_equation(model, v, gamma, state)["v"].item()
-        old_state_v = v.filter(pl.col("state") == state)["v"].item()
-        max_delta = max(max_delta, np.abs(new_state_v - old_state_v))
-        v = v.select(
-            "state",
-            v=(
-                pl.when(pl.col("state") == state)
-                .then(new_state_v)
-                .otherwise(pl.col("v"))
-            ),
-        )
+policy = model.group_by(["state", "action"]).agg(policy=pl.lit(1 / len(action_space)))
+num_updates = 0
+last_policy_change = 0
+state = env.reset(seed=seed)[0]
+while num_updates - last_policy_change < max_plateau_length:
+    num_updates += 1
 
-print(f"After {num_sweeps} sweeps:")
+    new_state_v = bellman_optimality_equation(model, v, gamma, state)["v"].item()
+    v = v.select(
+        "state",
+        v=(
+            pl.when(pl.col("state") == state)
+            .then(new_state_v)
+            .otherwise(pl.col("v"))
+        ),
+    )
+
+    policy_old = policy
+    policy = make_epsilon_greedy_policy(model, v, gamma, eps)
+    if (
+        policy
+        .join(policy_old, on=["state", "action"], suffix="_old")
+        .select((pl.col("policy") != pl.col("policy_old")).sum())
+        .item()
+    ) > 0:
+        last_policy_change = num_updates
+
+    state = simulate_policy_step(model, policy, state, seed=seed + num_updates)
+    # Any element from that subtable will do, since `done` is fully determined by `next_state`
+    if model.filter(pl.col("next_state") == state)["done"][0]:
+        state = env.reset(seed=seed + num_updates)[0]
+
+print(f"After {num_updates} updates:")
 print(v.sort('state'))
 
 # %%
