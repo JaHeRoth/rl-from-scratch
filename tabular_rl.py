@@ -52,3 +52,56 @@ def sample_from_policy(
     return int(action)
 
 # %%
+# On-policy Monte Carlo policy evaluation
+num_episodes = 10 ** 4
+learning_rate = 1e-2
+seed = 42
+
+policy = init_policy(state_space, action_space)
+print(policy.sort(["state", "action"]).pivot(on="action", index="state"))
+
+v = init_v(state_space)
+num_step = 0
+for episode in tqdm(range(num_episodes), desc="Running episodes"):
+    state, _ = env.reset()
+
+    state_trajectory = [state]
+    reward_trajectory = []
+    episode_over = False
+    while not episode_over:
+        num_step += 1
+        action = sample_from_policy(policy, state, seed=seed + num_step)
+        state, reward, terminated, truncated, _ = env.step(action)
+        reward_trajectory.append(reward)
+        state_trajectory.append(state)
+        episode_over = terminated or truncated
+    state_trajectory.pop()
+
+    trajectory = (
+        pl.DataFrame(
+            {
+                "step_count": range(len(state_trajectory)),
+                "state": state_trajectory,
+                "reward": reward_trajectory,
+            }
+        )
+        .with_columns(factor=gamma ** pl.col("step_count"))
+        .with_columns(remaining_return=(pl.col("reward") * pl.col("factor")).cum_sum(reverse=True) / pl.col("factor"))
+    )
+    targets = trajectory.group_by("state").agg(target=pl.mean("remaining_return"))
+    v = (
+        v.join(targets, on="state", how="left")
+        .select(
+            "state",
+            v=(
+                pl.when(pl.col("target").is_not_null())
+                .then((1 - learning_rate) * pl.col("v") + learning_rate * pl.col("target"))
+                .otherwise(pl.col("v"))
+            ),
+        )
+    )
+
+print(v.sort("state"))
+
+
+# %%
