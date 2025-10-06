@@ -279,7 +279,7 @@ class UniquePriorityQueue:
     items: list = []
     priorities: list = []
 
-    # Simple implementation, probably more efficient to use bisect and skip sort
+    # Simple implementation, can probably be made more efficient
     def put(self, item, priority):
         if item not in self.items:
             self.items.append(item)
@@ -290,9 +290,6 @@ class UniquePriorityQueue:
         order = np.argsort(self.priorities)
         self.items = list(np.array(self.items)[order])
         self.priorities = list(np.array(self.priorities)[order])
-
-        # self.priorities, self.items = zip(*sorted(zip(self.priorities, self.items)))
-
 
     def pop(self):
         self.priorities.pop()
@@ -332,6 +329,32 @@ while len(pq):
     )
 
 print(f"After {num_updates} updates:")
+print(v.sort('state'))
+
+# %%
+# Real time value iteration
+required_delta = 10 ** -10
+
+v = model.group_by("state").agg(v=pl.lit(0.0))
+max_delta = np.inf
+num_sweeps = 0
+while max_delta >= required_delta:
+    num_sweeps += 1
+    max_delta = 0.0
+    for state in state_space:
+        new_state_v = bellman_optimality_equation(model, v, gamma, state)["v"].item()
+        old_state_v = v.filter(pl.col("state") == state)["v"].item()
+        max_delta = max(max_delta, np.abs(new_state_v - old_state_v))
+        v = v.select(
+            "state",
+            v=(
+                pl.when(pl.col("state") == state)
+                .then(new_state_v)
+                .otherwise(pl.col("v"))
+            ),
+        )
+
+print(f"After {num_sweeps} sweeps:")
 print(v.sort('state'))
 
 # %%
