@@ -1,2 +1,2 @@
 # rl-from-scratch
-Reimplementing some reinforcement learning algorithms from scratch, for the purpose of learning. Will probably follow Sutton &amp; Barto.
+Reimplementing from scratch the algorithms of _Reinforcement Learning_ by Sutton & Barto.
