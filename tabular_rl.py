@@ -15,7 +15,7 @@ gamma = 0.9
 state_space = list(range(env.observation_space.n))
 action_space = list(range(env.action_space.n))
 
-def init_v(state_space: Iterable):
+def init_v(state_space: Iterable) -> pl.DataFrame:
     return pl.DataFrame(
         {
             "state": state_space,
@@ -23,7 +23,7 @@ def init_v(state_space: Iterable):
         }
     )
 
-def init_policy(state_space: Iterable, action_space: Iterable):
+def init_policy(state_space: Iterable, action_space: Iterable) -> pl.DataFrame:
     return (
         pl.DataFrame(
             [
@@ -53,7 +53,11 @@ def sample_from_policy(
 
 # %%
 # On-policy Monte Carlo policy evaluation
-num_episodes = 10 ** 4
+def learning_rate_for_update(base_learning_rate: float, update_number: int) -> float:
+    numerator = max(1, update_number // 2500) ** 0.51
+    return base_learning_rate / numerator
+
+num_episodes = 40_000
 learning_rate = 1e-2
 seed = 42
 
@@ -61,6 +65,7 @@ policy = init_policy(state_space, action_space)
 print(policy.sort(["state", "action"]).pivot(on="action", index="state"))
 
 v = init_v(state_space)
+num_update = 0
 num_step = 0
 for episode in tqdm(range(num_episodes), desc="Running episodes"):
     state, _ = env.reset()
@@ -89,6 +94,9 @@ for episode in tqdm(range(num_episodes), desc="Running episodes"):
         .with_columns(remaining_return=(pl.col("reward") * pl.col("factor")).cum_sum(reverse=True) / pl.col("factor"))
     )
     targets = trajectory.group_by("state").agg(target=pl.mean("remaining_return"))
+
+    num_update += 1
+    lr = learning_rate_for_update(base_learning_rate=learning_rate, update_number=num_update)
     v = (
         v.join(targets, on="state", how="left")
         .select(
