@@ -1,10 +1,8 @@
 # %%
-from typing import Iterable
-
-from tqdm import tqdm
+import gymnasium as gym
 import numpy as np
 import polars as pl
-import gymnasium as gym
+from tqdm import tqdm
 
 pl.Config.set_tbl_rows(50)
 pl.Config.set_tbl_cols(30)
@@ -274,64 +272,6 @@ print(f"After {num_sweeps} sweeps:")
 print(v.sort('state'))
 
 # %%
-# Value iteration with prioritized sweeping
-class UniquePriorityQueue:
-    items: list = []
-    priorities: list = []
-
-    # Simple implementation, can probably be made more efficient
-    def put(self, item, priority):
-        if item not in self.items:
-            self.items.append(item)
-            self.priorities.append(priority)
-        elif self.priorities[item_idx := self.items.index(item)] < priority:
-            self.priorities[item_idx] = priority
-
-        order = np.argsort(self.priorities)
-        self.items = list(np.array(self.items)[order])
-        self.priorities = list(np.array(self.priorities)[order])
-
-    def pop(self):
-        self.priorities.pop()
-        return self.items.pop()
-
-    def __len__(self):
-        return len(self.items)
-
-
-required_delta = 10 ** -10
-
-pq = UniquePriorityQueue()
-for state in state_space:
-    pq.put(item=state, priority=np.inf)
-
-v = model.group_by("state").agg(v=pl.lit(0.0))
-num_updates = 0
-while len(pq):
-    num_updates += 1
-    state = pq.pop()
-
-    new_state_v = bellman_optimality_equation(model, v, gamma, state)["v"].item()
-    old_state_v = v.filter(pl.col("state") == state)["v"].item()
-    delta = np.abs(new_state_v - old_state_v)
-
-    if delta >= required_delta:
-        for prev_state in model.filter(pl.col("next_state") == state)["state"].unique():
-            pq.put(item=prev_state, priority=delta)
-
-    v = v.select(
-        "state",
-        v=(
-            pl.when(pl.col("state") == state)
-            .then(new_state_v)
-            .otherwise(pl.col("v"))
-        ),
-    )
-
-print(f"After {num_updates} updates:")
-print(v.sort('state'))
-
-# %%
 # Real time value iteration
 def make_epsilon_greedy_policy(model: pl.DataFrame, v: pl.DataFrame, gamma: float, eps: float) -> pl.DataFrame:
     return (
@@ -401,5 +341,95 @@ while num_updates - last_policy_change < max_plateau_length:
 
 print(f"After {num_updates} updates:")
 print(v.sort('state'))
+
+# %%
+# Value iteration with prioritized sweeping
+class UniquePriorityQueue:
+    items: list = []
+    priorities: list = []
+
+    # Simple implementation, can probably be made more efficient
+    def put(self, item, priority):
+        if item not in self.items:
+            self.items.append(item)
+            self.priorities.append(priority)
+        elif self.priorities[item_idx := self.items.index(item)] < priority:
+            self.priorities[item_idx] = priority
+
+        order = np.argsort(self.priorities)
+        self.items = list(np.array(self.items)[order])
+        self.priorities = list(np.array(self.priorities)[order])
+
+    def pop(self):
+        self.priorities.pop()
+        return self.items.pop()
+
+    def __len__(self):
+        return len(self.items)
+
+
+required_delta = 10 ** -10
+
+pq = UniquePriorityQueue()
+for state in state_space:
+    pq.put(item=state, priority=np.inf)
+
+v = model.group_by("state").agg(v=pl.lit(0.0))
+num_updates = 0
+while len(pq):
+    num_updates += 1
+    state = pq.pop()
+
+    new_state_v = bellman_optimality_equation(model, v, gamma, state)["v"].item()
+    old_state_v = v.filter(pl.col("state") == state)["v"].item()
+    delta = np.abs(new_state_v - old_state_v)
+
+    if delta >= required_delta:
+        for prev_state in model.filter(pl.col("next_state") == state)["state"].unique():
+            pq.put(item=prev_state, priority=delta)
+
+    v = v.select(
+        "state",
+        v=(
+            pl.when(pl.col("state") == state)
+            .then(new_state_v)
+            .otherwise(pl.col("v"))
+        ),
+    )
+
+print(f"After {num_updates} updates:")
+print(v.sort('state'))
+
+# %%
+# Run learned (greedy) policy
+def sample_from_policy(
+    policy: pl.DataFrame, state: int, seed: int | None = None
+) -> int:
+    relevant_policy = (
+        policy
+        .filter(pl.col("state") == state)
+        .sort("action")
+    )
+    action = np.random.default_rng(seed).choice(
+        relevant_policy["action"], p=relevant_policy["policy"]
+    )
+    return int(action)
+
+env = gym.make('FrozenLake-v1', desc=None, map_name="4x4", is_slippery=True, render_mode='human')
+policy = policy_improvement(model, v, gamma)
+print(policy.sort(["state", "action"]).pivot(on="action", index="state"))
+
+num_episodes = 3
+for episode in tqdm(range(num_episodes), desc="Running episodes"):
+    observation, _ = env.reset()
+
+    episode_over = False
+    total_reward = 0
+    while not episode_over:
+        action = sample_from_policy(policy, state=observation)
+        observation, reward, terminated, truncated, _ = env.step(action)
+        total_reward += reward
+        episode_over = terminated or truncated
+env.close()
 
 # %%
