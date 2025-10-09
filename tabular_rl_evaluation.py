@@ -292,3 +292,42 @@ for state, ret in enumerate(v):
     print(f"{state}: {ret:.3f}")
 
 # %%
+# TD(lambda) with Dutch traces (known in book as "true online TD(lambda)")
+num_steps = 40_000
+learning_rate = 1e-1
+learning_rate_schedule_period = 40
+learning_rate_schedule_power = 0.51
+trace_factor = 0.9
+seed = 42
+policy = init_policy(state_space, action_space)
+
+v = np.zeros_like(state_space, dtype=np.float64)
+trace = np.zeros_like(state_space, dtype=np.float64)
+state, _ = env.reset(seed=seed)
+for step in tqdm(range(num_steps), desc="Running steps"):
+    action = sample_from_policy(policy, state, seed=seed + step)
+    next_state, reward, terminated, truncated, _ = env.step(action)
+    episode_over = terminated or truncated
+
+    td_target = float(reward) + gamma * v[next_state]
+    lr = learning_rate_for_update(
+        base_learning_rate=learning_rate,
+        update_number=step,
+        period=learning_rate_schedule_period,
+        numerator_power=learning_rate_schedule_power,
+    )
+
+    # For standard TD(lambda) (with additive traces), remove the `(1 - lr)` factor
+    trace *= gamma * trace_factor * (1 - lr)
+    trace[state] += 1
+    v += lr * (td_target - v) * trace
+
+    if episode_over:
+        state, _ = env.reset(seed=seed + step)
+    else:
+        state = next_state
+
+for state, ret in enumerate(v):
+    print(f"{state}: {ret:.3f}")
+
+# %%
