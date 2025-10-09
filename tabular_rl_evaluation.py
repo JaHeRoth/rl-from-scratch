@@ -209,3 +209,36 @@ for episode in tqdm(range(num_episodes), desc="Running episodes"):
 print(v.sort("state"))
 
 # %%
+# TD(0)
+num_steps = 40_000
+learning_rate = 1e-1
+learning_rate_schedule_period = 40
+learning_rate_schedule_power = 0.51
+seed = 42
+policy = init_policy(state_space, action_space)
+
+v = np.zeros_like(state_space, dtype=np.float64)
+state, _ = env.reset(seed=seed)
+for step in tqdm(range(num_steps), desc="Running steps"):
+    action = sample_from_policy(policy, state, seed=seed + step)
+    next_state, reward, terminated, truncated, _ = env.step(action)
+    episode_over = terminated or truncated
+
+    td_target = float(reward) + gamma * v[next_state]
+    lr = learning_rate_for_update(
+        base_learning_rate=learning_rate,
+        update_number=step,
+        period=learning_rate_schedule_period,
+        numerator_power=learning_rate_schedule_power,
+    )
+    v[state] += lr * (td_target - v[state])
+
+    if episode_over:
+        state, _ = env.reset(seed=seed + step)
+    else:
+        state = next_state
+
+for state, ret in enumerate(v):
+    print(f"{state}: {ret:.3f}")
+
+# %%
