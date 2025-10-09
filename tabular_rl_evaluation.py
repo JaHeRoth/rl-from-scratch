@@ -242,3 +242,53 @@ for state, ret in enumerate(v):
     print(f"{state}: {ret:.3f}")
 
 # %%
+# n-step TD-learning
+n = 5
+num_steps = 40_000
+learning_rate = 1e-1
+learning_rate_schedule_period = 50
+learning_rate_schedule_power = 0.51
+seed = 42
+policy = init_policy(state_space, action_space)
+
+v = np.zeros_like(state_space, dtype=np.float64)
+states = []
+rewards = []
+state, _ = env.reset(seed=seed)
+for step in tqdm(range(num_steps), desc="Running steps"):
+    action = sample_from_policy(policy, state, seed=seed + step)
+    next_state, reward, terminated, truncated, _ = env.step(action)
+    episode_over = terminated or truncated
+
+    states.append(state)
+    rewards.append(reward)
+
+    lr = learning_rate_for_update(
+        base_learning_rate=learning_rate,
+        update_number=step,
+        period=learning_rate_schedule_period,
+        numerator_power=learning_rate_schedule_power,
+    )
+
+    if episode_over:
+        for k in reversed(range(1, min(n, len(rewards)) + 1)):
+            td_target = np.array(rewards[-k:]) @ gamma ** np.arange(k)
+            v[states[-k]] += lr * (td_target - v[states[-k]])
+
+        state, _ = env.reset(seed=seed + step)
+        states = []
+        rewards = []
+    else:
+        if len(rewards) >= n:
+            td_target = (
+                np.array(rewards[-n:]) @ gamma ** np.arange(n)
+                + gamma ** n * v[next_state]
+            )
+            v[states[-n]] += lr * (td_target - v[states[-n]])
+
+        state = next_state
+
+for state, ret in enumerate(v):
+    print(f"{state}: {ret:.3f}")
+
+# %%
