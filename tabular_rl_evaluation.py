@@ -119,3 +119,93 @@ for episode in tqdm(range(num_episodes), desc="Running episodes"):
 print(v.sort("state"))
 
 # %%
+# Off-policy Monte Carlo policy evaluation (through weighted importance sampling)
+num_episodes = 10_000
+learning_rate = 1e-1
+learning_rate_schedule_period = 75
+learning_rate_schedule_power = 0.51
+seed = 42
+
+target_policy = (
+    pl.DataFrame(
+        [
+            {
+                "state": state,
+                "action": action,
+                "policy": 0.1 + 0.6 * (action == 1),
+            }
+            for state in state_space
+            for action in action_space
+        ]
+    )
+)
+behavior_policy = init_policy(state_space, action_space)
+
+v = init_v(state_space)
+num_step = 0
+for episode in tqdm(range(num_episodes), desc="Running episodes"):
+    state, _ = env.reset(seed=seed + episode)
+
+    trajectory = []
+    episode_over = False
+    while not episode_over:
+        action = sample_from_policy(behavior_policy, state, seed=seed + num_step)
+        next_state, reward, terminated, truncated, _ = env.step(action)
+        trajectory.append(
+            {
+                "step_count": len(trajectory),
+                "state": state,
+                "action": action,
+                "reward": reward,
+            }
+        )
+        state = next_state
+        episode_over = terminated or truncated
+        num_step += 1
+
+    targets = (
+        pl.LazyFrame(trajectory)
+        .join(target_policy.lazy(), on=["state", "action"])
+        .join(behavior_policy.lazy(), on=["state", "action"], suffix="_behavior")
+        .sort("step_count")
+        .with_columns(
+            factor=gamma ** pl.col("step_count"),
+            importance_sampling_ratio=(pl.col("policy") / pl.col("policy_behavior")).cum_prod(reverse=True),
+        )
+        .with_columns(remaining_return=(pl.col("reward") * pl.col("factor")).cum_sum(reverse=True) / pl.col("factor"))
+        .group_by("state")
+        .agg(
+            target=(
+                pl.when(pl.sum("importance_sampling_ratio") == 0)
+                .then(0.0)
+                .otherwise(
+                    (pl.col("importance_sampling_ratio") * pl.col("remaining_return")).sum()
+                    / pl.sum("importance_sampling_ratio")
+                )
+            )
+        )
+    )
+
+    lr = learning_rate_for_update(
+        base_learning_rate=learning_rate,
+        update_number=episode,
+        period=learning_rate_schedule_period,
+        numerator_power=learning_rate_schedule_power,
+    )
+    v = (
+        v.lazy()
+        .join(targets, on="state", how="left")
+        .select(
+            "state",
+            v=(
+                pl.when(pl.col("target").is_not_null())
+                .then((1 - learning_rate) * pl.col("v") + learning_rate * pl.col("target"))
+                .otherwise(pl.col("v"))
+            ),
+        )
+        .collect()  # Only collecting at the very end causes SIGBUS
+    )
+
+print(v.sort("state"))
+
+# %%
