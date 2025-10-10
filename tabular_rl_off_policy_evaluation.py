@@ -165,3 +165,72 @@ for episode in tqdm(range(num_episodes), desc="Running episodes"):
 print(v.sort("state"))
 
 # %%
+# Expected Sarsa
+# ~1M needed for convergence on 4x4
+num_steps = 100_000
+
+def expected_sarsa(
+    q_in: pl.DataFrame,
+    target_policy: pl.DataFrame,
+    behavior_policy: pl.DataFrame,
+    gamma: float,
+    lr_schedule: list[float],
+    seed: int = 42,
+) -> pl.DataFrame:
+    q = (
+        q_in.sort(["state", "action"])
+        .pivot(on="action", index="state")
+        .drop("state")
+        .to_numpy()
+    )
+    target_policy_probs = (
+        target_policy.sort(["state", "action"])
+        .pivot(on="action", index="state")
+        .drop("state")
+        .to_numpy()
+    )
+    state, _ = env.reset(seed=seed)
+    for step, lr in tqdm(enumerate(lr_schedule), desc="Running steps"):
+        action = sample_from_policy(behavior_policy, state, seed=seed + step)
+        next_state, reward, terminated, truncated, _ = env.step(action)
+        episode_over = terminated or truncated
+
+        if episode_over:
+            target = float(reward)
+        else:
+            target = float(reward) + gamma * target_policy_probs[next_state, :] @ q[next_state, :]
+
+        q[state, action] += lr * (target - q[state, action])
+
+        if episode_over:
+            state, _ = env.reset(seed=seed + step)
+        else:
+            state = next_state
+
+    return q_in.with_columns(q=q.flatten())
+
+
+target_policy = init_target_policy(state_space, action_space)
+q = expected_sarsa(
+    q_in=init_q(state_space, action_space),
+    target_policy=target_policy,
+    behavior_policy=init_behavior_policy(state_space, action_space),
+    gamma=gamma,
+    lr_schedule=[
+        learning_rate_for_update(
+            base_learning_rate=1e-1,
+            update_number=step,
+            period=300,
+            numerator_power=0.51,
+        )
+        for step in range(num_steps)
+    ],
+)
+print(
+    q.join(target_policy, on=["state", "action"])
+    .group_by("state")
+    .agg(v=(pl.col("policy") * pl.col("q")).sum())
+    .sort("state")
+)
+
+# %%
