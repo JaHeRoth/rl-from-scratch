@@ -55,6 +55,29 @@ def bellman_equation(
     )
 
 
+def bellman_optimality_equation(
+    model: pl.DataFrame, v: pl.DataFrame, gamma: float, state: int | None
+) -> pl.DataFrame:
+    if state is not None:
+        model = model.filter(pl.col("state") == state)
+
+    return (
+        model
+        .join(v, left_on="next_state", right_on="state")
+        .group_by(["state", "action"])
+        .agg(
+            q=(
+                pl.col("probability")
+                * (pl.col("reward") + gamma * pl.col("v"))
+            ).sum()
+        )
+        .group_by("state")
+        .agg(
+            v=pl.max("q")
+        )
+    )
+
+
 print(f"v = {bellman_equation(model, v, policy, gamma, state=None).sort('state')}")
 for state in state_space:
     print(f"v({state}) = {bellman_equation(model, v, policy, gamma, state)['v'].item()}")
@@ -229,29 +252,6 @@ print(policy.sort(["state", "action"]).pivot(on="action", index="state"))
 
 # %%
 # (Synchronous) value iteration
-def bellman_optimality_equation(
-    model: pl.DataFrame, v: pl.DataFrame, gamma: float, state: int | None
-) -> pl.DataFrame:
-    if state is not None:
-        model = model.filter(pl.col("state") == state)
-
-    return (
-        model
-        .join(v, left_on="next_state", right_on="state")
-        .group_by(["state", "action"])
-        .agg(
-            q=(
-                pl.col("probability")
-                * (pl.col("reward") + gamma * pl.col("v"))
-            ).sum()
-        )
-        .group_by("state")
-        .agg(
-            v=pl.max("q")
-        )
-    )
-
-
 required_delta = 10 ** -10
 
 v = model.group_by("state").agg(v=pl.lit(0.0))

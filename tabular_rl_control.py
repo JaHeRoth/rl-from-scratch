@@ -99,6 +99,7 @@ def policy_iteration(
     q_in: pl.DataFrame,
     policy_in: pl.DataFrame,
     evaluation_func: callable,
+    gamma: float,
     lr_schedule: list[float],
     eps_schedule: list[float],
     verbose: bool,
@@ -127,6 +128,126 @@ def policy_iteration(
                 print(policy.sort(["state", "action"]).pivot(on="action", index="state"))
 
     return q, policy
+
+# %%
+# Sarsa
+def sarsa(
+    q_in: pl.DataFrame, policy: pl.DataFrame, gamma: float, lr_schedule: list[float], seed: int = 42
+) -> pl.DataFrame:
+    q = (
+        q_in.sort(["state", "action"])
+        .pivot(on="action", index="state")
+        .drop("state")
+        .to_numpy()
+    )
+    state, _ = env.reset(seed=seed)
+    action = sample_from_policy(policy, state, seed=seed)
+    for step, lr in tqdm(enumerate(lr_schedule), desc="Running steps"):
+        next_state, reward, terminated, truncated, _ = env.step(action)
+        episode_over = terminated or truncated
+
+        if episode_over:
+            target = float(reward)
+        else:
+            next_action = sample_from_policy(policy, state=next_state, seed=seed + step + 1)
+            target = float(reward) + gamma * q[next_state, next_action]
+
+        q[state, action] += lr * (target - q[state, action])
+
+        if episode_over:
+            state, _ = env.reset(seed=seed + step)
+            action = sample_from_policy(policy, state, seed=seed + step + 1)
+        else:
+            state = next_state
+            action = next_action
+
+    return q_in.with_columns(q=q.flatten())
+
+
+q, policy = policy_iteration(
+    q_in=init_q(state_space, action_space),
+    policy_in=init_policy(state_space, action_space),
+    evaluation_func=sarsa,
+    gamma=gamma,
+    lr_schedule=[
+        learning_rate_for_update(
+            base_learning_rate=1e-1,
+            update_number=step,
+            period=100,
+            numerator_power=0.51,
+        )
+        # ~300k needed to reach optimal policy on 4x4
+        for step in range(10_000)
+    ],
+    eps_schedule=[0.2, 0.1, 0.05, 0.02, 0.01, 0.0],
+    verbose=False
+)
+print(
+    q.join(policy, on=["state", "action"])
+    .group_by("state")
+    .agg(v=(pl.col("policy") * pl.col("q")).sum())
+    .sort("state")
+)
+print(policy.pivot(on="action", index="state").sort("state"))
+
+# %%
+# Expected Sarsa
+def expected_sarsa(
+    q_in: pl.DataFrame, policy: pl.DataFrame, gamma: float, lr_schedule: list[float], seed: int = 42
+) -> pl.DataFrame:
+    q = (
+        q_in.sort(["state", "action"])
+        .pivot(on="action", index="state")
+        .drop("state")
+        .to_numpy()
+    )
+    state, _ = env.reset(seed=seed)
+    for step, lr in tqdm(enumerate(lr_schedule), desc="Running steps"):
+        action = sample_from_policy(policy, state, seed=seed + step)
+        next_state, reward, terminated, truncated, _ = env.step(action)
+        episode_over = terminated or truncated
+
+        if episode_over:
+            target = float(reward)
+        else:
+            next_action_probs = policy.filter(pl.col("state") == next_state).sort("action")["policy"].to_numpy()
+            target = float(reward) + gamma * next_action_probs @ q[next_state, :]
+
+        q[state, action] += lr * (target - q[state, action])
+
+        if episode_over:
+            state, _ = env.reset(seed=seed + step)
+        else:
+            state = next_state
+
+    return q_in.with_columns(q=q.flatten())
+
+
+q, policy = policy_iteration(
+    q_in=init_q(state_space, action_space),
+    policy_in=init_policy(state_space, action_space),
+    evaluation_func=expected_sarsa,
+    gamma=gamma,
+    lr_schedule=[
+        learning_rate_for_update(
+            base_learning_rate=1e-1,
+            update_number=step,
+            period=100,
+            numerator_power=0.51,
+        )
+        # ~200k needed to reach optimal policy on 4x4
+        for step in range(10_000)
+    ],
+    eps_schedule=[0.2, 0.1, 0.05, 0.02, 0.01, 0.0],
+    verbose=False
+)
+print(
+    q.join(policy, on=["state", "action"])
+    .group_by("state")
+    .agg(v=(pl.col("policy") * pl.col("q")).sum())
+    .sort("state")
+)
+print(policy.pivot(on="action", index="state").sort("state"))
 
 # %%
 # Run learned policy
