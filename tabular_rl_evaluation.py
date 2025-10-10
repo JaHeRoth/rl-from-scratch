@@ -74,7 +74,7 @@ def learning_rate_for_update(
 # On-policy Monte Carlo policy evaluation
 num_episodes = 10_000
 learning_rate = 1e-1
-learning_rate_schedule_period = 50
+learning_rate_schedule_period = 100
 learning_rate_schedule_power = 0.51
 seed = 42
 
@@ -98,8 +98,8 @@ for episode in tqdm(range(num_episodes), desc="Running episodes"):
         num_step += 1
     state_trajectory.pop()
 
-    trajectory = (
-        pl.DataFrame(
+    targets = (
+        pl.LazyFrame(
             {
                 "step_count": range(len(state_trajectory)),
                 "state": state_trajectory,
@@ -108,95 +108,8 @@ for episode in tqdm(range(num_episodes), desc="Running episodes"):
         )
         .with_columns(factor=gamma ** pl.col("step_count"))
         .with_columns(remaining_return=(pl.col("reward") * pl.col("factor")).cum_sum(reverse=True) / pl.col("factor"))
-    )
-    targets = trajectory.group_by("state").agg(target=pl.mean("remaining_return"))
-
-    lr = learning_rate_for_update(
-        base_learning_rate=learning_rate,
-        update_number=episode,
-        period=learning_rate_schedule_period,
-        numerator_power=learning_rate_schedule_power,
-    )
-    v = (
-        v.join(targets, on="state", how="left")
-        .select(
-            "state",
-            v=(
-                pl.when(pl.col("target").is_not_null())
-                .then((1 - learning_rate) * pl.col("v") + learning_rate * pl.col("target"))
-                .otherwise(pl.col("v"))
-            ),
-        )
-    )
-
-print(v.sort("state"))
-
-# %%
-# Off-policy Monte Carlo policy evaluation (through weighted importance sampling)
-num_episodes = 10_000
-learning_rate = 1e-1
-learning_rate_schedule_period = 75
-learning_rate_schedule_power = 0.51
-seed = 42
-
-target_policy = (
-    pl.DataFrame(
-        [
-            {
-                "state": state,
-                "action": action,
-                "policy": 0.1 + 0.6 * (action == 1),
-            }
-            for state in state_space
-            for action in action_space
-        ]
-    )
-)
-behavior_policy = init_policy(state_space, action_space)
-
-v = init_v(state_space)
-num_step = 0
-for episode in tqdm(range(num_episodes), desc="Running episodes"):
-    state, _ = env.reset(seed=seed + episode)
-
-    trajectory = []
-    episode_over = False
-    while not episode_over:
-        action = sample_from_policy(behavior_policy, state, seed=seed + num_step)
-        next_state, reward, terminated, truncated, _ = env.step(action)
-        trajectory.append(
-            {
-                "step_count": len(trajectory),
-                "state": state,
-                "action": action,
-                "reward": reward,
-            }
-        )
-        state = next_state
-        episode_over = terminated or truncated
-        num_step += 1
-
-    targets = (
-        pl.LazyFrame(trajectory)
-        .join(target_policy.lazy(), on=["state", "action"])
-        .join(behavior_policy.lazy(), on=["state", "action"], suffix="_behavior")
-        .sort("step_count")
-        .with_columns(
-            factor=gamma ** pl.col("step_count"),
-            importance_sampling_ratio=(pl.col("policy") / pl.col("policy_behavior")).cum_prod(reverse=True),
-        )
-        .with_columns(remaining_return=(pl.col("reward") * pl.col("factor")).cum_sum(reverse=True) / pl.col("factor"))
         .group_by("state")
-        .agg(
-            target=(
-                pl.when(pl.sum("importance_sampling_ratio") == 0)
-                .then(0.0)
-                .otherwise(
-                    (pl.col("importance_sampling_ratio") * pl.col("remaining_return")).sum()
-                    / pl.sum("importance_sampling_ratio")
-                )
-            )
-        )
+        .agg(target=pl.mean("remaining_return"))
     )
 
     lr = learning_rate_for_update(
@@ -212,7 +125,7 @@ for episode in tqdm(range(num_episodes), desc="Running episodes"):
             "state",
             v=(
                 pl.when(pl.col("target").is_not_null())
-                .then((1 - learning_rate) * pl.col("v") + learning_rate * pl.col("target"))
+                .then((1 - lr) * pl.col("v") + lr * pl.col("target"))
                 .otherwise(pl.col("v"))
             ),
         )
@@ -223,9 +136,9 @@ print(v.sort("state"))
 
 # %%
 # TD(0)
-num_steps = 40_000
+num_steps = 40_000  # ~400k for convergence on 4x4
 learning_rate = 1e-1
-learning_rate_schedule_period = 40
+learning_rate_schedule_period = 100
 learning_rate_schedule_power = 0.51
 seed = 42
 policy = init_policy(state_space, action_space)
@@ -257,9 +170,9 @@ for state, ret in enumerate(v):
 # %%
 # n-step TD-learning
 n = 5
-num_steps = 40_000
+num_steps = 40_000  # ~400k for convergence on 4x4
 learning_rate = 1e-1
-learning_rate_schedule_period = 50
+learning_rate_schedule_period = 100
 learning_rate_schedule_power = 0.51
 seed = 42
 policy = init_policy(state_space, action_space)
@@ -306,9 +219,9 @@ for state, ret in enumerate(v):
 
 # %%
 # TD(lambda) with Dutch traces (known in book as "true online TD(lambda)")
-num_steps = 40_000
+num_steps = 40_000  # ~400k for convergence on 4x4
 learning_rate = 1e-1
-learning_rate_schedule_period = 40
+learning_rate_schedule_period = 100
 learning_rate_schedule_power = 0.51
 trace_factor = 0.9
 seed = 42
@@ -322,7 +235,6 @@ for step in tqdm(range(num_steps), desc="Running steps"):
     next_state, reward, terminated, truncated, _ = env.step(action)
     episode_over = terminated or truncated
 
-    td_target = float(reward) + gamma * v[next_state]
     lr = learning_rate_for_update(
         base_learning_rate=learning_rate,
         update_number=step,
@@ -331,9 +243,9 @@ for step in tqdm(range(num_steps), desc="Running steps"):
     )
 
     # For standard TD(lambda) (with additive traces), remove the `(1 - lr)` factor
-    trace *= gamma * trace_factor * (1 - lr)
-    trace[state] += 1
-    v += lr * (td_target - v) * trace
+    trace = gamma * trace_factor * (1 - lr) * trace + (np.arange(len(v)) == state)
+    td_error = float(reward) + gamma * v[next_state] - v[state]
+    v += lr * td_error * trace
 
     if episode_over:
         state, _ = env.reset(seed=seed + step)
