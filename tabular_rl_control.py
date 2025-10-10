@@ -101,8 +101,8 @@ def policy_iteration(
     policy_in: pl.DataFrame,
     evaluation_func: callable,
     gamma: float,
-    lr_schedule: list[float],
-    eps_schedule: list[float],
+    lr_schedule: Iterable[float],
+    eps_schedule: Iterable[float],
     verbose: bool,
 ) -> tuple[pl.DataFrame, pl.DataFrame]:
     q = q_in
@@ -133,7 +133,7 @@ def policy_iteration(
 # %%
 # Sarsa
 def sarsa(
-    q_in: pl.DataFrame, policy: pl.DataFrame, gamma: float, lr_schedule: list[float], seed: int = 42
+    q_in: pl.DataFrame, policy: pl.DataFrame, gamma: float, lr_schedule: Iterable[float], seed: int = 42
 ) -> pl.DataFrame:
     q = (
         q_in.sort(["state", "action"])
@@ -194,7 +194,7 @@ print(policy.pivot(on="action", index="state").sort("state"))
 # %%
 # Expected Sarsa
 def expected_sarsa(
-    q_in: pl.DataFrame, policy: pl.DataFrame, gamma: float, lr_schedule: list[float], seed: int = 42
+    q_in: pl.DataFrame, policy: pl.DataFrame, gamma: float, lr_schedule: Iterable[float], seed: int = 42
 ) -> pl.DataFrame:
     q = (
         q_in.sort(["state", "action"])
@@ -252,11 +252,13 @@ print(policy.pivot(on="action", index="state").sort("state"))
 
 # %%
 # Q-Learning
+num_steps = 40_000  # ~1M needed to reach optimal policy on 4x4
+
 def q_learning(
     q_in: pl.DataFrame,
     gamma: float,
-    eps: float,
-    lr_schedule: list[float],
+    eps_schedule: Iterable[float],
+    lr_schedule: Iterable[float],
     seed: int = 42,
 ) -> pl.DataFrame:
     q = (
@@ -266,7 +268,7 @@ def q_learning(
         .to_numpy()
     )
     state, _ = env.reset(seed=seed)
-    for step, lr in tqdm(enumerate(lr_schedule), desc="Running steps"):
+    for step, (eps, lr) in tqdm(enumerate(zip(eps_schedule, lr_schedule)), desc="Running steps"):
         # We only need the behavior policy for the current state
         state_q = pl.DataFrame(
             {
@@ -295,7 +297,7 @@ def q_learning(
 q = q_learning(
     q_in=init_q(state_space, action_space),
     gamma=gamma,
-    eps=0.25,  # Probably more efficient with e.g. linear schedule from 1.0 to 0.25
+    eps_schedule=np.linspace(1.0, 0.25, num_steps),
     lr_schedule=[
         learning_rate_for_update(
             base_learning_rate=1e-1,
@@ -303,8 +305,7 @@ q = q_learning(
             period=100,
             numerator_power=0.51,
         )
-        # ~1M needed to reach optimal policy on 4x4
-        for step in range(500_000)
+        for step in range(num_steps)
     ],
 )
 policy = eps_greedy_policy(q, eps=0.0)
