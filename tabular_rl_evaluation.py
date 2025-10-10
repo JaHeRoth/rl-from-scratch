@@ -23,6 +23,19 @@ def init_v(state_space: Iterable) -> pl.DataFrame:
         }
     )
 
+def init_q(state_space: Iterable, action_space: Iterable) -> pl.DataFrame:
+    return pl.DataFrame(
+        [
+            {
+                "state": state,
+                "action": action,
+                "q": 0.0,
+            }
+            for state in state_space
+            for action in action_space
+        ]
+    )
+
 def init_policy(state_space: Iterable, action_space: Iterable) -> pl.DataFrame:
     return (
         pl.DataFrame(
@@ -329,5 +342,63 @@ for step in tqdm(range(num_steps), desc="Running steps"):
 
 for state, ret in enumerate(v):
     print(f"{state}: {ret:.3f}")
+
+# %%
+# Sarsa
+def sarsa(
+    q_in: pl.DataFrame, policy: pl.DataFrame, gamma: float, lr_schedule: list[float], seed: int = 42
+) -> pl.DataFrame:
+    q = (
+        q_in.sort(["state", "action"])
+        .pivot(on="action", index="state")
+        .drop("state")
+        .to_numpy()
+    )
+    state, _ = env.reset(seed=seed)
+    action = sample_from_policy(policy, state, seed=seed)
+    for step, lr in tqdm(enumerate(lr_schedule), desc="Running steps"):
+        next_state, reward, terminated, truncated, _ = env.step(action)
+        episode_over = terminated or truncated
+
+        if episode_over:
+            target = float(reward)
+        else:
+            # Note: Can be made off-policy by sampling from target policy for target
+            #  and from behavior policy for action actually taken
+            next_action = sample_from_policy(policy, state=next_state, seed=seed + step + 1)
+            target = float(reward) + gamma * q[next_state, next_action]
+
+        q[state, action] += lr * (target - q[state, action])
+
+        if episode_over:
+            state, _ = env.reset(seed=seed + step)
+            action = sample_from_policy(policy, state, seed=seed + step + 1)
+        else:
+            state = next_state
+            action = next_action
+
+    return q_in.with_columns(q=q.flatten())
+
+
+q = sarsa(
+    q_in=init_q(state_space, action_space),
+    policy=init_policy(state_space, action_space),
+    gamma=gamma,
+    lr_schedule=[
+        learning_rate_for_update(
+            base_learning_rate=1e-1,
+            update_number=step,
+            period=300,
+            numerator_power=0.51,
+        )
+        for step in range(40_000)  # ~1M needed for convergence on 4x4
+    ],
+)
+print(
+    q.join(init_policy(state_space, action_space), on=["state", "action"])
+    .group_by("state")
+    .agg(v=(pl.col("policy") * pl.col("q")).sum())
+    .sort("state")
+)
 
 # %%
