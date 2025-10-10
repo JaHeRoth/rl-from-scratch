@@ -26,7 +26,7 @@ model = pl.DataFrame(
     },
 )
 
-gamma = 0.9
+gamma = 0.95
 state_space = model["state"].unique()
 action_space = model["action"].unique()
 

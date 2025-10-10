@@ -11,7 +11,7 @@ pl.Config.set_tbl_cols(30)
 
 env = gym.make('FrozenLake-v1', desc=None, map_name="4x4", is_slippery=True)
 
-gamma = 0.9
+gamma = 0.95
 state_space = list(range(env.observation_space.n))
 action_space = list(range(env.action_space.n))
 
