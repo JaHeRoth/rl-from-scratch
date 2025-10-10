@@ -4,6 +4,7 @@ from typing import Iterable
 import gymnasium as gym
 import numpy as np
 import polars as pl
+from numpy.random import Generator
 from tqdm import tqdm
 
 pl.Config.set_tbl_rows(50)
@@ -45,7 +46,7 @@ def init_policy(state_space: Iterable, action_space: Iterable) -> pl.DataFrame:
     )
 
 def sample_from_policy(
-    policy: pl.DataFrame, state: int, seed: int | None = None
+    policy: pl.DataFrame, state: int, seed: int | None | Generator = None
 ) -> int:
     relevant_policy = (
         policy
@@ -241,6 +242,72 @@ q, policy = policy_iteration(
     eps_schedule=[0.2, 0.1, 0.05, 0.02, 0.01, 0.0],
     verbose=False
 )
+print(
+    q.join(policy, on=["state", "action"])
+    .group_by("state")
+    .agg(v=(pl.col("policy") * pl.col("q")).sum())
+    .sort("state")
+)
+print(policy.pivot(on="action", index="state").sort("state"))
+
+# %%
+# Q-Learning
+def q_learning(
+    q_in: pl.DataFrame,
+    gamma: float,
+    eps: float,
+    lr_schedule: list[float],
+    seed: int = 42,
+) -> pl.DataFrame:
+    q = (
+        q_in.sort(["state", "action"])
+        .pivot(on="action", index="state")
+        .drop("state")
+        .to_numpy()
+    )
+    state, _ = env.reset(seed=seed)
+    for step, lr in tqdm(enumerate(lr_schedule), desc="Running steps"):
+        # We only need the behavior policy for the current state
+        state_q = pl.DataFrame(
+            {
+                "state": state,
+                "action": range(q.shape[1]),
+                "q": q[state, :],
+            }
+        )
+        behavior_policy = eps_greedy_policy(q=state_q, eps=eps)
+
+        action = sample_from_policy(policy=behavior_policy, state=state, seed=seed + step)
+        next_state, reward, terminated, truncated, _ = env.step(action)
+        episode_over = terminated or truncated
+
+        target = float(reward) + gamma * q[next_state, :].max()
+        q[state, action] += lr * (target - q[state, action])
+
+        if episode_over:
+            state, _ = env.reset(seed=seed + step)
+        else:
+            state = next_state
+
+    return q_in.with_columns(q=q.flatten())
+
+
+q = q_learning(
+    q_in=init_q(state_space, action_space),
+    gamma=gamma,
+    eps=0.25,  # Probably more efficient with e.g. linear schedule from 1.0 to 0.25
+    lr_schedule=[
+        learning_rate_for_update(
+            base_learning_rate=1e-1,
+            update_number=step,
+            period=100,
+            numerator_power=0.51,
+        )
+        # ~1M needed to reach optimal policy on 4x4
+        for step in range(500_000)
+    ],
+)
+policy = eps_greedy_policy(q, eps=0.0)
 print(
     q.join(policy, on=["state", "action"])
     .group_by("state")
