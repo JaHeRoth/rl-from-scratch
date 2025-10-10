@@ -318,6 +318,83 @@ print(
 print(policy.pivot(on="action", index="state").sort("state"))
 
 # %%
+# Double Q-Learning
+num_steps = 40_000  # ~1M needed to reach optimal policy on 4x4
+
+def double_q_learning(
+    q_in: pl.DataFrame,
+    gamma: float,
+    eps_schedule: Iterable[float],
+    lr_schedule: Iterable[float],
+    seed: int = 42,
+) -> pl.DataFrame:
+    q1 = (
+        q_in.sort(["state", "action"])
+        .pivot(on="action", index="state")
+        .drop("state")
+        .to_numpy()
+    )
+    q2 = q1.copy()
+    rng = np.random.default_rng(10 ** 10 + seed)
+    state, _ = env.reset(seed=seed)
+    for step, (eps, lr) in tqdm(enumerate(zip(eps_schedule, lr_schedule)), desc="Running steps"):
+        # We only need the behavior policy for the current state
+        state_q = pl.DataFrame(
+            {
+                "state": state,
+                "action": range(q1.shape[1]),
+                "q": (q1[state, :] + q2[state, :]) / 2,
+            }
+        )
+        behavior_policy = eps_greedy_policy(q=state_q, eps=eps)
+
+        action = sample_from_policy(policy=behavior_policy, state=state, seed=seed + step)
+        next_state, reward, terminated, truncated, _ = env.step(action)
+        episode_over = terminated or truncated
+
+        if rng.random() > 0.5:
+            q_actor = q1
+            q_critic = q2
+        else:
+            q_actor = q2
+            q_critic = q1
+
+        target = float(reward) + gamma * q_critic[next_state, q_actor[next_state, :].argmax()]
+        q_actor[state, action] += lr * (target - q_actor[state, action])
+
+        if episode_over:
+            state, _ = env.reset(seed=seed + step)
+        else:
+            state = next_state
+
+    q = (q1 + q2) / 2
+    return q_in.with_columns(q=q.flatten())
+
+
+q = q_learning(
+    q_in=init_q(state_space, action_space),
+    gamma=gamma,
+    eps_schedule=np.linspace(1.0, 0.25, num_steps),
+    lr_schedule=[
+        learning_rate_for_update(
+            base_learning_rate=1e-1,
+            update_number=step,
+            period=100,
+            numerator_power=0.51,
+        )
+        for step in range(num_steps)
+    ],
+)
+policy = eps_greedy_policy(q, eps=0.0)
+print(
+    q.join(policy, on=["state", "action"])
+    .group_by("state")
+    .agg(v=(pl.col("policy") * pl.col("q")).sum())
+    .sort("state")
+)
+print(policy.pivot(on="action", index="state").sort("state"))
+
+# %%
 # Run learned policy
 human_env = gym.make('FrozenLake-v1', desc=None, map_name=map_name, is_slippery=True, render_mode='human')
 
