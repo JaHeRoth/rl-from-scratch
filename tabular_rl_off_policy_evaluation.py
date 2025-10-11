@@ -166,8 +166,7 @@ print(v.sort("state"))
 
 # %%
 # Expected Sarsa
-# ~1M needed for convergence on 4x4
-num_steps = 100_000
+num_steps = 100_000  # ~1M needed for convergence on 4x4
 
 def expected_sarsa(
     q_in: pl.DataFrame,
@@ -236,7 +235,7 @@ print(
 # %%
 # n-step Tree Backup
 # Quite a bit of duplicate computation going on here, so should be possible to speed up quite a bit
-num_steps = 1_000_000
+num_steps = 40_000  # ~1M needed for convergence on 4x4
 
 def n_step_tree_backup_update(trajectory, gamma, target_policy_probs, q, lr, n):
     target = trajectory[-n]["reward"]
@@ -246,7 +245,7 @@ def n_step_tree_backup_update(trajectory, gamma, target_policy_probs, q, lr, n):
         target += factor * trajectory[-n + k]["target_contribution"]
         factor *= gamma * trajectory[-n + k]["realized_action_prob"]
     target += (
-        target_policy_probs[trajectory[-1]["next_state"], :] @ q[trajectory[-1]["next_state"], :]
+        factor * target_policy_probs[trajectory[-1]["next_state"], :] @ q[trajectory[-1]["next_state"], :]
     )
     q[trajectory[-n]["state"], trajectory[-n]["action"]] += (
         lr * (target - q[trajectory[-n]["state"], trajectory[-n]["action"]])
@@ -290,7 +289,8 @@ def n_step_tree_backup(
                 "next_state": next_state,
                 "realized_action_prob": target_policy_probs[state, action],
                 "target_contribution": (
-                    target_policy_probs[state, :] * (np.arange(q.shape[1]) != action) @ q[state, :]
+                    target_policy_probs[state, :] @ q[state, :]
+                    + target_policy_probs[state, action] * (float(reward) - q[state, action])
                 ),
                 # "bootstrap_value": bootstrap_value,
                 # "target_contribution": (
@@ -347,7 +347,7 @@ q = n_step_tree_backup(
     target_policy=target_policy,
     behavior_policy=init_behavior_policy(state_space, action_space),
     gamma=gamma,
-    n=5,
+    n=3,
     lr_schedule=[
         learning_rate_for_update(
             base_learning_rate=1e-1,
