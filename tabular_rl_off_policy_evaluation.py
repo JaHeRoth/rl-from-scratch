@@ -240,7 +240,6 @@ num_steps = 40_000  # ~1M needed for convergence on 4x4
 def n_step_tree_backup_update(trajectory, gamma, target_policy_probs, q, lr, n):
     target = trajectory[-n]["reward"]
     factor = gamma
-    # TODO: Vectorize this loop
     for k in range(1, n):
         target += factor * trajectory[-n + k]["target_contribution"]
         factor *= gamma * trajectory[-n + k]["realized_action_prob"]
@@ -280,7 +279,6 @@ def n_step_tree_backup(
         next_state, reward, terminated, truncated, _ = env.step(action)
         episode_over = terminated or truncated
 
-        # bootstrap_value = target_policy_probs[state, :] @ q[state, :]
         trajectory.append(
             {
                 "state": state,
@@ -292,23 +290,8 @@ def n_step_tree_backup(
                     target_policy_probs[state, :] @ q[state, :]
                     + target_policy_probs[state, action] * (float(reward) - q[state, action])
                 ),
-                # "bootstrap_value": bootstrap_value,
-                # "target_contribution": (
-                #     bootstrap_value + target_policy_probs[state, action] * (float(reward) - q[state, action])
-                # )
             }
         )
-
-        # (
-        #     pl.DataFrame(trajectory)
-        #     .join(target_policy, on=["state", "action"])
-        #     .join(q, on=["state", "action"])
-        #     .sort("step_count")  # TODO: Include that column
-        #     .select(
-        #         target_policy_action_prob=pl.col("policy"),
-        #         bootstrap_estimate=(pl.col("policy") * (pl.col("")))
-        #     )
-        # )
 
         if episode_over:
             for k in reversed(range(1, min(n, len(trajectory)) + 1)):
@@ -319,22 +302,6 @@ def n_step_tree_backup(
         else:
             if len(trajectory) >= n:
                 n_step_tree_backup_update(trajectory, gamma, target_policy_probs, q, lr, n=n)
-                # target = (
-                #     pl.DataFrame(trajectory[-n:])
-                #     .with_columns(
-                #         prob_factor=pl.col("realized_action_prob").cum_prod().shift(1, fill_value=1),
-                #         discounting_factor=pl.lit(gamma).cum_prod().shift(1, fill_value=1),
-                #     )
-                #     .select(
-                #         target_contribution=(
-                #             pl.col("prob_factor")
-                #             * pl.col("discounting_factor")
-                #             * (pl.col("bootstrap_contribution") + pl.col("realized_action_prob") * pl.col("reward"))
-                #         )
-                #     )
-                #     .sum()
-                #     .item()
-                # )  # TODO: Add the expected sarsa of next_state
 
             state = next_state
 
