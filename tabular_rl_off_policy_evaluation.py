@@ -235,6 +235,134 @@ print(
 
 # %%
 # n-step Tree Backup
-# TODO
+# Quite a bit of duplicate computation going on here, so should be possible to speed up quite a bit
+num_steps = 1_000_000
+
+def n_step_tree_backup_update(trajectory, gamma, target_policy_probs, q, lr, n):
+    target = trajectory[-n]["reward"]
+    factor = gamma
+    # TODO: Vectorize this loop
+    for k in range(1, n):
+        target += factor * trajectory[-n + k]["target_contribution"]
+        factor *= gamma * trajectory[-n + k]["realized_action_prob"]
+    target += (
+        target_policy_probs[trajectory[-1]["next_state"], :] @ q[trajectory[-1]["next_state"], :]
+    )
+    q[trajectory[-n]["state"], trajectory[-n]["action"]] += (
+        lr * (target - q[trajectory[-n]["state"], trajectory[-n]["action"]])
+    )
+
+def n_step_tree_backup(
+    q_in: pl.DataFrame,
+    target_policy: pl.DataFrame,
+    behavior_policy: pl.DataFrame,
+    gamma: float,
+    n: int,
+    lr_schedule: list[float],
+    seed: int = 42,
+) -> pl.DataFrame:
+    q = (
+        q_in.sort(["state", "action"])
+        .pivot(on="action", index="state")
+        .drop("state")
+        .to_numpy()
+    )
+    target_policy_probs = (
+        target_policy.sort(["state", "action"])
+        .pivot(on="action", index="state")
+        .drop("state")
+        .to_numpy()
+    )
+
+    trajectory = []
+    state, _ = env.reset(seed=seed)
+    for step, lr in tqdm(enumerate(lr_schedule), desc="Running steps"):
+        action = sample_from_policy(behavior_policy, state, seed=seed + step)
+        next_state, reward, terminated, truncated, _ = env.step(action)
+        episode_over = terminated or truncated
+
+        # bootstrap_value = target_policy_probs[state, :] @ q[state, :]
+        trajectory.append(
+            {
+                "state": state,
+                "action": action,
+                "reward": reward,
+                "next_state": next_state,
+                "realized_action_prob": target_policy_probs[state, action],
+                "target_contribution": (
+                    target_policy_probs[state, :] * (np.arange(q.shape[1]) != action) @ q[state, :]
+                ),
+                # "bootstrap_value": bootstrap_value,
+                # "target_contribution": (
+                #     bootstrap_value + target_policy_probs[state, action] * (float(reward) - q[state, action])
+                # )
+            }
+        )
+
+        # (
+        #     pl.DataFrame(trajectory)
+        #     .join(target_policy, on=["state", "action"])
+        #     .join(q, on=["state", "action"])
+        #     .sort("step_count")  # TODO: Include that column
+        #     .select(
+        #         target_policy_action_prob=pl.col("policy"),
+        #         bootstrap_estimate=(pl.col("policy") * (pl.col("")))
+        #     )
+        # )
+
+        if episode_over:
+            for k in reversed(range(1, min(n, len(trajectory)) + 1)):
+                n_step_tree_backup_update(trajectory, gamma, target_policy_probs, q, lr, n=k)
+
+            state, _ = env.reset(seed=seed + step)
+            trajectory = []
+        else:
+            if len(trajectory) >= n:
+                n_step_tree_backup_update(trajectory, gamma, target_policy_probs, q, lr, n=n)
+                # target = (
+                #     pl.DataFrame(trajectory[-n:])
+                #     .with_columns(
+                #         prob_factor=pl.col("realized_action_prob").cum_prod().shift(1, fill_value=1),
+                #         discounting_factor=pl.lit(gamma).cum_prod().shift(1, fill_value=1),
+                #     )
+                #     .select(
+                #         target_contribution=(
+                #             pl.col("prob_factor")
+                #             * pl.col("discounting_factor")
+                #             * (pl.col("bootstrap_contribution") + pl.col("realized_action_prob") * pl.col("reward"))
+                #         )
+                #     )
+                #     .sum()
+                #     .item()
+                # )  # TODO: Add the expected sarsa of next_state
+
+            state = next_state
+
+    return q_in.with_columns(q=q.flatten())
+
+
+target_policy = init_target_policy(state_space, action_space)
+q = n_step_tree_backup(
+    q_in=init_q(state_space, action_space),
+    target_policy=target_policy,
+    behavior_policy=init_behavior_policy(state_space, action_space),
+    gamma=gamma,
+    n=5,
+    lr_schedule=[
+        learning_rate_for_update(
+            base_learning_rate=1e-1,
+            update_number=step,
+            period=300,
+            numerator_power=0.51,
+        )
+        for step in range(num_steps)
+    ],
+)
+print(
+    q.join(target_policy, on=["state", "action"])
+    .group_by("state")
+    .agg(v=(pl.col("policy") * pl.col("q")).sum())
+    .sort("state")
+)
 
 # %%
