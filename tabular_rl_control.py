@@ -396,13 +396,16 @@ print(policy.pivot(on="action", index="state").sort("state"))
 
 # %%
 # Dyna-Q
-num_steps = 40_000  # ~1M needed to reach optimal policy on 4x4
+# ~10k * 10 needed to reach optimal policy on 4x4
+num_steps = 3_000
+n_samples_per_step = 10
 
-def q_learning(
+def dyna_q(
     q_in: pl.DataFrame,
     gamma: float,
     eps_schedule: Iterable[float],
     lr_schedule: Iterable[float],
+    n_samples_per_step: int,
     seed: int = 42,
 ) -> pl.DataFrame:
     q = (
@@ -411,6 +414,13 @@ def q_learning(
         .drop("state")
         .to_numpy()
     )
+    # If we rather want every experienced state-action pair to be sampled with equal probability, then this
+    #  `[(state, action, next_state, reward)]` should be replaced by `{(state, action): [(next_state, reward)]`
+    #  and the below single `rng.choice` call should be replaced by two `rng.choice` calls (one to choose the
+    #  state-action pair and the other to choose the experience for that state-action pair)
+    experiences: list[tuple[int, int, int, float]] = []
+
+    rng = np.random.default_rng(seed)
     state, _ = env.reset(seed=seed)
     for step, (eps, lr) in tqdm(enumerate(zip(eps_schedule, lr_schedule)), desc="Running steps"):
         # We only need the behavior policy for the current state
@@ -423,12 +433,19 @@ def q_learning(
         )
         behavior_policy = eps_greedy_policy(q=state_q, eps=eps)
 
-        action = sample_from_policy(policy=behavior_policy, state=state, seed=seed + step)
+        action = sample_from_policy(policy=behavior_policy, state=state, seed=rng)
         next_state, reward, terminated, truncated, _ = env.step(action)
         episode_over = terminated or truncated
 
+        experiences.append((state, action, next_state, reward))
+
         target = float(reward) + gamma * q[next_state, :].max()
         q[state, action] += lr * (target - q[state, action])
+
+        for _ in range(n_samples_per_step):
+            _state, _action, _next_state, _reward = rng.choice(experiences)
+            _target = float(_reward) + gamma * q[int(_next_state), :].max()
+            q[int(_state), int(_action)] += lr * (_target - q[int(_state), int(_action)])
 
         if episode_over:
             state, _ = env.reset(seed=seed + step)
@@ -438,7 +455,7 @@ def q_learning(
     return q_in.with_columns(q=q.flatten())
 
 
-q = q_learning(
+q = dyna_q(
     q_in=init_q(state_space, action_space),
     gamma=gamma,
     eps_schedule=np.linspace(1.0, 0.25, num_steps),
@@ -451,6 +468,7 @@ q = q_learning(
         )
         for step in range(num_steps)
     ],
+    n_samples_per_step=n_samples_per_step,
 )
 policy = eps_greedy_policy(q, eps=0.0)
 print(
