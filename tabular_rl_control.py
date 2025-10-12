@@ -481,39 +481,31 @@ print(policy.pivot(on="action", index="state").sort("state"))
 
 # %%
 # Dyna-Q with prioritized sweeping
-# ~10k * 10 needed to reach optimal policy on 4x4
+# ~30k * 10 needed to reach optimal policy on 4x4
 num_steps = 3_000
 n_samples_per_step = 10
 
 class UniquePriorityQueue:
-    items: list = []
-    priorities: list = []
+    _priority_mapping = {}
 
-    # Simple implementation, can probably be made more efficient
     def put(self, item, priority):
-        if item not in self.items:
-            self.items.append(item)
-            self.priorities.append(priority)
-        elif self.priorities[item_idx := self.items.index(item)] < priority:
-            self.priorities[item_idx] = priority
-
-        order = np.argsort(self.priorities)
-        self.items = list(np.array(self.items)[order])
-        self.priorities = list(np.array(self.priorities)[order])
+        if item not in self._priority_mapping or self._priority_mapping[item] < priority:
+            self._priority_mapping[item] = priority
 
     def pop(self):
-        self.priorities.pop()
-        return self.items.pop()
+        max_priority_item = max(self._priority_mapping.keys(), key=self._priority_mapping.get)
+        self._priority_mapping.pop(max_priority_item)
+        return max_priority_item
 
     def __len__(self):
-        return len(self.items)
+        return len(self._priority_mapping)
 
-def dyna_q(
+def dyna_q_with_prioritized_sweeping(
     q_in: pl.DataFrame,
     gamma: float,
     eps_schedule: Iterable[float],
-    lr_schedule: Iterable[float],
     n_samples_per_step: int,
+    required_delta: float = 10 ** -10,
     seed: int = 42,
 ) -> pl.DataFrame:
     q = (
@@ -522,15 +514,20 @@ def dyna_q(
         .drop("state")
         .to_numpy()
     )
-    # If we rather want every experienced state-action pair to be sampled with equal probability, then this
-    #  `[(state, action, next_state, reward)]` should be replaced by `{(state, action): [(next_state, reward)]`
-    #  and the below single `rng.choice` call should be replaced by two `rng.choice` calls (one to choose the
-    #  state-action pair and the other to choose the experience for that state-action pair)
-    experiences: list[tuple[int, int, int, float]] = []
+    model = pl.DataFrame(
+        schema={
+            "state": pl.Int64,
+            "action": pl.Int64,
+            "next_state": pl.Int64,
+            "reward": pl.Float64,
+            "experience_count": pl.Int64,
+        }
+    )
+    pq = UniquePriorityQueue()
 
     rng = np.random.default_rng(seed)
     state, _ = env.reset(seed=seed)
-    for step, (eps, lr) in tqdm(enumerate(zip(eps_schedule, lr_schedule)), desc="Running steps"):
+    for step, eps in tqdm(enumerate(eps_schedule), desc="Running steps"):
         # We only need the behavior policy for the current state
         state_q = pl.DataFrame(
             {
@@ -545,37 +542,102 @@ def dyna_q(
         next_state, reward, terminated, truncated, _ = env.step(action)
         episode_over = terminated or truncated
 
-        experiences.append((state, action, next_state, reward))
+        transition_filter_expr = (pl.col("state") == state) & (pl.col("action") == action) & (pl.col("next_state") == next_state)
+        if model.filter(transition_filter_expr).is_empty():
+            model = pl.concat(
+                [
+                    model,
+                    pl.DataFrame(
+                        {
+                            "state": state,
+                            "action": action,
+                            "next_state": next_state,
+                            "reward": reward,
+                            "experience_count": 1,
+                        }
+                    ),
+                ]
+            )
+        else:
+            model = (
+                model
+                .with_columns(
+                    reward=(
+                        pl.when(transition_filter_expr)
+                        .then(
+                            (pl.col("reward") * pl.col("experience_count") + reward)
+                            / (pl.col("experience_count") + 1)
+                        )
+                        .otherwise("reward")
+                    ),
+                    experience_count=pl.col("experience_count") + transition_filter_expr.cast(pl.Int64)
+                )
+            )
 
-        target = float(reward) + gamma * q[next_state, :].max()
-        q[state, action] += lr * (target - q[state, action])
+        abs_error = abs(float(reward) + gamma * q[next_state, :].max() - q[state, action])
+        if abs_error > required_delta:
+            pq.put(item=(state, action), priority=abs_error)
 
         for _ in range(n_samples_per_step):
-            _state, _action, _next_state, _reward = rng.choice(experiences)
-            _target = float(_reward) + gamma * q[int(_next_state), :].max()
-            q[int(_state), int(_action)] += lr * (_target - q[int(_state), int(_action)])
+            if len(pq) == 0:
+                break
+
+            _state, _action = pq.pop()
+            relevant_model = (
+                model.filter(
+                    (pl.col("state") == _state) & (pl.col("action") == _action)
+                )
+                .with_columns(
+                    probability=pl.col("experience_count") / pl.sum("experience_count")
+                )
+            )
+            _target = (
+                relevant_model["probability"].to_numpy()
+                @ (
+                    relevant_model["reward"].to_numpy()
+                    + gamma * q[relevant_model["next_state"], :].max(axis=1)
+                )
+            )
+            # print(f"{step=}, {_step=}, {_state=}, {_action=}, q={q[_state, _action]:.3f}, {_target=}")
+            q[_state, _action] = _target
+
+            # Probably quite inefficient to jump between polars and numpy, but makes for simple code
+            q_df = pl.DataFrame(
+                [
+                    {
+                        "state": state,
+                        "action": action,
+                        "q": q[state, action],
+                    }
+                ]
+            )
+            for _prev_state, _prev_action, _sample_abs_error in (
+                model.filter(pl.col("next_state") == _state)
+                .join(q_df, on=["state", "action"])
+                .select(
+                    "state",
+                    "action",
+                    sample_abs_error=(pl.col("reward") + gamma * q[_state, _action] - pl.col("q")).abs(),
+                )
+                .filter(pl.col("sample_abs_error") > required_delta)
+            ).iter_rows():
+                # Without this if statement we just keep readding the same state to the priority queue, since gamma < 1
+                if _prev_state != state:
+                    pq.put(item=(_prev_state, _prev_action), priority=_sample_abs_error)
 
         if episode_over:
             state, _ = env.reset(seed=seed + step)
         else:
             state = next_state
 
+    print(model.sort(["state", "action", "next_state"]))
     return q_in.with_columns(q=q.flatten())
 
 
-q = dyna_q(
+q = dyna_q_with_prioritized_sweeping(
     q_in=init_q(state_space, action_space),
     gamma=gamma,
     eps_schedule=np.linspace(1.0, 0.25, num_steps),
-    lr_schedule=[
-        learning_rate_for_update(
-            base_learning_rate=1e-1,
-            update_number=step,
-            period=100,
-            numerator_power=0.51,
-        )
-        for step in range(num_steps)
-    ],
     n_samples_per_step=n_samples_per_step,
 )
 policy = eps_greedy_policy(q, eps=0.0)
