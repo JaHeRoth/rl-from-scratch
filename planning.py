@@ -345,27 +345,19 @@ print(v.sort('state'))
 # %%
 # Value iteration with prioritized sweeping
 class UniquePriorityQueue:
-    items: list = []
-    priorities: list = []
+    _priority_mapping = {}
 
-    # Simple implementation, can probably be made more efficient
     def put(self, item, priority):
-        if item not in self.items:
-            self.items.append(item)
-            self.priorities.append(priority)
-        elif self.priorities[item_idx := self.items.index(item)] < priority:
-            self.priorities[item_idx] = priority
-
-        order = np.argsort(self.priorities)
-        self.items = list(np.array(self.items)[order])
-        self.priorities = list(np.array(self.priorities)[order])
+        if item not in self._priority_mapping or self._priority_mapping[item] < priority:
+            self._priority_mapping[item] = priority
 
     def pop(self):
-        self.priorities.pop()
-        return self.items.pop()
+        max_priority_item = max(self._priority_mapping.keys(), key=self._priority_mapping.get)
+        self._priority_mapping.pop(max_priority_item)
+        return max_priority_item
 
     def __len__(self):
-        return len(self.items)
+        return len(self._priority_mapping)
 
 
 required_delta = 10 ** -10
