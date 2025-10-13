@@ -65,33 +65,16 @@ def learning_rate_for_update(
     return base_learning_rate / numerator
 
 def eps_greedy_policy(q: pl.DataFrame, eps: float) -> pl.DataFrame:
-    max_q_per_state = q.group_by("state").agg(q=pl.max("q"))
-    greedy_choice = (
-        q.join(max_q_per_state, on="state", suffix="_max")
-        .select(
-            "state",
-            "action",
-            greedy_choice=pl.col("q") == pl.col("q_max"),
-        )
-    )
-    # TODO: Try replacing group_by + agg + join with `over`
-    counts = (
-        greedy_choice
-        .group_by("state")
-        .agg(
-            num_greedy_choices=pl.sum("greedy_choice"),
-            num_choices=pl.len(),
-        )
-    )
     return (
-        greedy_choice
-        .join(counts, on="state")
+        q.with_columns(q_max=pl.max("q").over("state"))
+        .with_columns(greedy_choice=pl.col("q") == pl.col("q_max"),)
         .select(
             "state",
             "action",
             policy=(
-                (1 - eps) * pl.col("greedy_choice").cast(pl.Float64) / pl.col("num_greedy_choices")
-                + eps / pl.col("num_choices")
+                (1 - eps) * pl.col("greedy_choice").cast(pl.Float64)
+                / pl.sum("greedy_choice").over("state")
+                + eps / pl.len().over("state")
             ),
         )
     )
@@ -165,31 +148,31 @@ def sarsa(
     return q_in.with_columns(q=q.flatten())
 
 
-q, policy = policy_iteration(
-    q_in=init_q(state_space, action_space),
-    policy_in=init_policy(state_space, action_space),
-    evaluation_func=sarsa,
-    gamma=gamma,
-    lr_schedule=[
-        learning_rate_for_update(
-            base_learning_rate=1e-1,
-            update_number=step,
-            period=100,
-            numerator_power=0.51,
-        )
-        # ~300k needed to reach optimal policy on 4x4
-        for step in range(10_000)
-    ],
-    eps_schedule=[0.2, 0.1, 0.05, 0.02, 0.01, 0.0],
-    verbose=False
-)
-print(
-    q.join(policy, on=["state", "action"])
-    .group_by("state")
-    .agg(v=(pl.col("policy") * pl.col("q")).sum())
-    .sort("state")
-)
-print(policy.pivot(on="action", index="state").sort("state"))
+# q, policy = policy_iteration(
+#     q_in=init_q(state_space, action_space),
+#     policy_in=init_policy(state_space, action_space),
+#     evaluation_func=sarsa,
+#     gamma=gamma,
+#     lr_schedule=[
+#         learning_rate_for_update(
+#             base_learning_rate=1e-1,
+#             update_number=step,
+#             period=100,
+#             numerator_power=0.51,
+#         )
+#         # ~300k needed to reach optimal policy on 4x4
+#         for step in range(10_000)
+#     ],
+#     eps_schedule=[0.2, 0.1, 0.05, 0.02, 0.01, 0.0],
+#     verbose=False
+# )
+# print(
+#     q.join(policy, on=["state", "action"])
+#     .group_by("state")
+#     .agg(v=(pl.col("policy") * pl.col("q")).sum())
+#     .sort("state")
+# )
+# print(policy.pivot(on="action", index="state").sort("state"))
 
 # %%
 # Expected Sarsa
@@ -224,31 +207,31 @@ def expected_sarsa(
     return q_in.with_columns(q=q.flatten())
 
 
-q, policy = policy_iteration(
-    q_in=init_q(state_space, action_space),
-    policy_in=init_policy(state_space, action_space),
-    evaluation_func=expected_sarsa,
-    gamma=gamma,
-    lr_schedule=[
-        learning_rate_for_update(
-            base_learning_rate=1e-1,
-            update_number=step,
-            period=100,
-            numerator_power=0.51,
-        )
-        # ~200k needed to reach optimal policy on 4x4
-        for step in range(10_000)
-    ],
-    eps_schedule=[0.2, 0.1, 0.05, 0.02, 0.01, 0.0],
-    verbose=False
-)
-print(
-    q.join(policy, on=["state", "action"])
-    .group_by("state")
-    .agg(v=(pl.col("policy") * pl.col("q")).sum())
-    .sort("state")
-)
-print(policy.pivot(on="action", index="state").sort("state"))
+# q, policy = policy_iteration(
+#     q_in=init_q(state_space, action_space),
+#     policy_in=init_policy(state_space, action_space),
+#     evaluation_func=expected_sarsa,
+#     gamma=gamma,
+#     lr_schedule=[
+#         learning_rate_for_update(
+#             base_learning_rate=1e-1,
+#             update_number=step,
+#             period=100,
+#             numerator_power=0.51,
+#         )
+#         # ~200k needed to reach optimal policy on 4x4
+#         for step in range(10_000)
+#     ],
+#     eps_schedule=[0.2, 0.1, 0.05, 0.02, 0.01, 0.0],
+#     verbose=False
+# )
+# print(
+#     q.join(policy, on=["state", "action"])
+#     .group_by("state")
+#     .agg(v=(pl.col("policy") * pl.col("q")).sum())
+#     .sort("state")
+# )
+# print(policy.pivot(on="action", index="state").sort("state"))
 
 # %%
 # Q-Learning
@@ -621,7 +604,7 @@ def dyna_q_with_prioritized_sweeping(
                 )
                 .filter(pl.col("sample_abs_error") > required_delta)
             ).iter_rows():
-                # Without this if statement we just keep readding the same state to the priority queue, since gamma < 1
+                # Without this if statement we just keep re-adding the same state to the priority queue, since gamma < 1
                 if _prev_state != state:
                     pq.put(item=(_prev_state, _prev_action), priority=_sample_abs_error)
 
