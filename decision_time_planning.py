@@ -112,3 +112,74 @@ for episode in tqdm(range(num_episodes), desc="Running episodes"):
 env.close()
 
 # %%
+# Monte Carlo rollout (or rather, n-step TD rollout)
+env = gym.make(**env_params, render_mode="human")
+
+def simulate_policy(
+    model: pl.DataFrame,
+    policy: pl.DataFrame,
+    state: int,
+    action: int,
+    max_depth: int,
+    q: pl.DataFrame,
+    seed: int,
+) -> float:
+    reward = 0.0
+    factor = 1.0
+    for i in range(max_depth):
+        realization = model.filter(
+            (pl.col("state") == state) & (pl.col("action") == action)
+        ).sample(seed=seed + i)
+        reward += factor * realization["reward"].item()
+        state = realization["next_state"].item()
+        if realization["done"].item():
+            return reward
+
+        action = sample_from_policy(policy, state, seed=seed + max_depth + i)
+        factor *= gamma
+
+    leaf_q = q.filter((pl.col("state") == state) & (pl.col("action") == action))["q"].item()
+    return reward + factor * leaf_q
+
+def n_depth_rollout(
+    model: pl.DataFrame,
+    policy: pl.DataFrame,
+    state: int,
+    n_rollouts: int,
+    max_depth: int,
+    q: pl.DataFrame,
+    seed: int,
+) -> float:
+    return max(
+        model["action"].unique(),
+        key=lambda action: np.mean(
+            Parallel(n_jobs=-1)(
+                delayed(simulate_policy)(
+                    model, policy, state, action, max_depth, q, seed=seed + action * 10 ** 8 + sim_i * 10 ** 3
+                )
+                for sim_i in range(n_rollouts)
+            )
+        ),
+    )
+
+num_episodes = 3
+n_rollouts = 1000
+max_rollout_depth = 10
+seed = 42
+for episode in tqdm(range(num_episodes), desc="Running episodes"):
+    state, _ = env.reset(seed=seed + episode)
+
+    episode_over = False
+    total_reward = 0
+    while not episode_over:
+        seed += 10 ** 10
+        action = n_depth_rollout(
+            model, policy, state, n_rollouts, max_depth=max_rollout_depth, q=q, seed=seed
+        )
+        state, reward, terminated, truncated, _ = env.step(action)
+        total_reward += reward
+        episode_over = terminated or truncated
+    print(f"{total_reward=}")
+env.close()
+
+# %%
