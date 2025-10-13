@@ -183,3 +183,69 @@ for episode in tqdm(range(num_episodes), desc="Running episodes"):
 env.close()
 
 # %%
+# Monte Carlo Tree Search (MCTS)
+class MonteCarloSearchTree:
+    def __init__(self, model: pl.DataFrame, policy: pl.DataFrame, q: pl.DataFrame, gamma: float, seed: int):
+        self.model = model
+        self.policy = policy
+        self.gamma = gamma
+        self.seed = seed
+
+        self.q = q.pivot(on="action", index="state").drop("state").to_numpy()
+        self.n_visits = np.zeros((q["state"].n_unique(), q["action"].n_unique()))
+
+    def next_action(
+        self, state: int, n_rollouts: int, max_depth: int, lr: float, ucb_c: float
+    ) -> int:
+        for _ in range(n_rollouts):
+            trajectory = []
+            for step in range(max_depth):
+                state_ucb_values = (
+                    self.q[state, :]
+                    + ucb_c
+                    * np.sqrt(np.log(self.n_visits[state, :].sum() + 1) / (self.n_visits[state, :] + 1))
+                )
+                action = state_ucb_values.argmax()
+                realization = model.filter(
+                    (pl.col("state") == state) & (pl.col("action") == action)
+                ).sample(seed=self.seed)
+                trajectory.append((state, action, realization["reward"].item()))
+                state = realization["next_state"].item()
+                if realization["done"].item():
+                    break
+                self.seed += 1
+
+            target = 0.0 if realization["done"].item() else self.q[state, :].max()
+            for state, action, reward in reversed(trajectory):
+                target = self.gamma * target + reward
+                self.q[state, action] += lr * (target - self.q[state, action])
+                self.n_visits[state, action] += 1
+
+        return self.n_visits[state, :].argmax()
+
+
+num_episodes = 3
+n_rollouts = 1000
+max_rollout_depth = 5
+mcts_lr = 0.01
+mcts_ucb_c = q["q"].max()
+seed = 42
+mcts_tree = MonteCarloSearchTree(model, policy, q, gamma, seed)
+env = gym.make(**env_params, render_mode="human")
+
+for episode in tqdm(range(num_episodes), desc="Running episodes"):
+    state, _ = env.reset(seed=seed + 10 ** 15)
+
+    episode_over = False
+    total_reward = 0
+    while not episode_over:
+        action = mcts_tree.next_action(
+            state, n_rollouts, max_depth=max_rollout_depth, lr=mcts_lr, ucb_c=mcts_ucb_c
+        )
+        state, reward, terminated, truncated, _ = env.step(action)
+        total_reward += reward
+        episode_over = terminated or truncated
+    print(f"{total_reward=}")
+env.close()
+
+# %%
