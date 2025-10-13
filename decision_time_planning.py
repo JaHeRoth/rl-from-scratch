@@ -236,7 +236,7 @@ env = gym.make(**env_params)
 
 total_reward = 0.0
 for episode in tqdm(range(num_episodes), desc="Running episodes"):
-    state, _ = env.reset(seed=seed + 10 ** 15 + num_episodes)
+    state, _ = env.reset(seed=seed + 10 ** 15 + episode)
 
     episode_over = False
     while not episode_over:
@@ -246,8 +246,7 @@ for episode in tqdm(range(num_episodes), desc="Running episodes"):
         state, reward, terminated, truncated, _ = env.step(action)
         total_reward += reward
         episode_over = terminated or truncated
-    print(f"{total_reward=}")
-print(total_reward)
+print(f"{total_reward=}")
 env.close()
 
 # %%
