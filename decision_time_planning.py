@@ -77,7 +77,7 @@ def bellman_optimality_equation(
     )
 
 # (Synchronous) value iteration
-required_delta = 10 ** -2  # We want an almost-optimal policy
+required_delta = 10 ** -1.25  # We want an almost-optimal policy
 q = model.group_by(["state", "action"]).agg(q=pl.lit(0.0))
 max_delta = np.inf
 while max_delta >= required_delta:
@@ -95,26 +95,25 @@ print(policy.sort(["state", "action"]).pivot(on="action", index="state"))
 
 # %%
 # Run learned (greedy) policy
-env = gym.make(**env_params, render_mode="human")
+num_episodes = 10
+seed = 42
+env = gym.make(**env_params)
 
-num_episodes = 3
+total_reward = 0.0
 for episode in tqdm(range(num_episodes), desc="Running episodes"):
-    state, _ = env.reset()
+    state, _ = env.reset(seed=seed + episode)
 
     episode_over = False
-    total_reward = 0
     while not episode_over:
         action = sample_from_policy(policy, state)
         state, reward, terminated, truncated, _ = env.step(action)
         total_reward += reward
         episode_over = terminated or truncated
-    print(f"{total_reward=}")
+print(f"{total_reward=}")
 env.close()
 
 # %%
 # Monte Carlo rollout (or rather, n-step TD rollout)
-env = gym.make(**env_params, render_mode="human")
-
 def simulate_policy(
     model: pl.DataFrame,
     policy: pl.DataFrame,
@@ -162,15 +161,17 @@ def n_depth_rollout(
         ),
     )
 
-num_episodes = 3
+num_episodes = 10
 n_rollouts = 1000
 max_rollout_depth = 10
 seed = 42
+env = gym.make(**env_params)
+
+total_reward = 0.0
 for episode in tqdm(range(num_episodes), desc="Running episodes"):
     state, _ = env.reset(seed=seed + episode)
 
     episode_over = False
-    total_reward = 0
     while not episode_over:
         seed += 10 ** 10
         action = n_depth_rollout(
@@ -179,7 +180,7 @@ for episode in tqdm(range(num_episodes), desc="Running episodes"):
         state, reward, terminated, truncated, _ = env.step(action)
         total_reward += reward
         episode_over = terminated or truncated
-    print(f"{total_reward=}")
+print(f"{total_reward=}")
 env.close()
 
 # %%
@@ -224,20 +225,20 @@ class MonteCarloSearchTree:
         return self.q[state, :].argmax()
 
 
-num_episodes = 3
+num_episodes = 10
 n_rollouts = 1000
-max_rollout_depth = 5
+max_rollout_depth = 10
 mcts_lr = 0.01
 mcts_ucb_c = q["q"].max()
 seed = 42
 mcts_tree = MonteCarloSearchTree(model, policy, q, gamma, seed)
-env = gym.make(**env_params, render_mode="human")
+env = gym.make(**env_params)
 
+total_reward = 0.0
 for episode in tqdm(range(num_episodes), desc="Running episodes"):
-    state, _ = env.reset(seed=seed + 10 ** 15)
+    state, _ = env.reset(seed=seed + 10 ** 15 + num_episodes)
 
     episode_over = False
-    total_reward = 0
     while not episode_over:
         action = mcts_tree.next_action(
             state, n_rollouts, max_depth=max_rollout_depth, lr=mcts_lr, ucb_c=mcts_ucb_c
@@ -246,6 +247,7 @@ for episode in tqdm(range(num_episodes), desc="Running episodes"):
         total_reward += reward
         episode_over = terminated or truncated
     print(f"{total_reward=}")
+print(total_reward)
 env.close()
 
 # %%
