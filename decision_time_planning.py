@@ -1,0 +1,114 @@
+# %%
+import gymnasium as gym
+import numpy as np
+import polars as pl
+from numpy.random import Generator
+from tqdm import tqdm
+from joblib import Parallel, delayed
+
+pl.Config.set_tbl_rows(50)
+pl.Config.set_tbl_cols(30)
+
+env_params = dict(
+    id="FrozenLake-v1", desc=None, map_name="4x4", is_slippery=True
+)
+gamma = 0.95
+
+env = gym.make(**env_params)
+model = pl.DataFrame(
+    [
+        [s, a, p, s_next, r, terminal]
+        for (s, state_action_dict) in env.unwrapped.P.items()
+        for (a, outcomes) in state_action_dict.items()
+        for (p, s_next, r, terminal) in outcomes
+    ],
+    orient="row",
+    schema={
+        "state": pl.Int64,
+        "action": pl.Int64,
+        "probability": pl.Float64,
+        "next_state": pl.Int64,
+        "reward": pl.Float64,
+        "done": pl.Boolean,
+    },
+)
+
+def eps_greedy_policy(q: pl.DataFrame, eps: float) -> pl.DataFrame:
+    return (
+        q.with_columns(q_max=pl.max("q").over("state"))
+        .with_columns(greedy_choice=pl.col("q") == pl.col("q_max"),)
+        .select(
+            "state",
+            "action",
+            policy=(
+                (1 - eps) * pl.col("greedy_choice").cast(pl.Float64)
+                / pl.sum("greedy_choice").over("state")
+                + eps / pl.len().over("state")
+            ),
+        )
+    )
+
+def sample_from_policy(
+    policy: pl.DataFrame, state: int, seed: int | None = None
+) -> int:
+    relevant_policy = (
+        policy
+        .filter(pl.col("state") == state)
+        .sort("action")
+    )
+    action = np.random.default_rng(seed).choice(
+        relevant_policy["action"], p=relevant_policy["policy"]
+    )
+    return int(action)
+
+def bellman_optimality_equation(
+    model: pl.DataFrame, q: pl.DataFrame, gamma: float
+) -> pl.DataFrame:
+    v = q.group_by("state").agg(v=pl.max("q"))
+    return (
+        model
+        .join(v, left_on="next_state", right_on="state")
+        .group_by(["state", "action"])
+        .agg(
+            q=(
+                pl.col("probability") * (pl.col("reward") + gamma * pl.col("v"))
+            ).sum(),
+        )
+    )
+
+# (Synchronous) value iteration
+required_delta = 10 ** -2  # We want an almost-optimal policy
+q = model.group_by(["state", "action"]).agg(q=pl.lit(0.0))
+max_delta = np.inf
+while max_delta >= required_delta:
+    q_new = bellman_optimality_equation(model, q, gamma)
+    max_delta = (
+        q
+        .join(q_new, on=["state", "action"], suffix="_new")
+        .select((pl.col("q_new") - pl.col("q")).abs().max())
+        .item()
+    )
+    q = q_new
+
+policy = eps_greedy_policy(q, eps=0.0)
+print(policy.sort(["state", "action"]).pivot(on="action", index="state"))
+
+# %%
+# Run learned (greedy) policy
+env = gym.make(**env_params, render_mode="human")
+
+num_episodes = 3
+for episode in tqdm(range(num_episodes), desc="Running episodes"):
+    state, _ = env.reset()
+
+    episode_over = False
+    total_reward = 0
+    while not episode_over:
+        action = sample_from_policy(policy, state)
+        state, reward, terminated, truncated, _ = env.step(action)
+        total_reward += reward
+        episode_over = terminated or truncated
+    print(f"{total_reward=}")
+env.close()
+
+# %%
