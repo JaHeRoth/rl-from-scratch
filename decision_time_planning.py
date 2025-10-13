@@ -221,7 +221,7 @@ class MonteCarloSearchTree:
                 self.q[state, action] += lr * (target - self.q[state, action])
                 self.n_visits[state, action] += 1
 
-        return self.n_visits[state, :].argmax()
+        return self.q[state, :].argmax()
 
 
 num_episodes = 3
