@@ -2,6 +2,7 @@
 from typing import Iterable
 
 import gymnasium as gym
+from gymnasium import Env
 import numpy as np
 import polars as pl
 from numpy.random import Generator
@@ -10,54 +11,60 @@ from tqdm import tqdm
 pl.Config.set_tbl_rows(50)
 pl.Config.set_tbl_cols(30)
 
-env_params = dict(
-    id="FrozenLake-v1", desc=None, map_name="4x4", is_slippery=True
-)
+env_params = dict(id="CartPole-v1")
 gamma = 0.95
 
 env = gym.make(**env_params)
-# TODO: Migrate away from tabular state space
-state_space = list(range(env.observation_space.n))
-action_space = list(range(env.action_space.n))
 
-def init_q(state_space: Iterable, action_space: Iterable) -> pl.DataFrame:
-    return pl.DataFrame(
+def featurize(state: np.ndarray, action, action_space: Iterable) -> np.ndarray:
+    """:return Polynomial featurization of state-action pair"""
+    state_base_features = np.concat(
         [
-            {
-                "state": state,
-                "action": action,
-                "q": 0.0,
-            }
-            for state in state_space
-            for action in action_space
+            np.ones(1),
+            state,
         ]
     )
-
-def init_policy(state_space: Iterable, action_space: Iterable) -> pl.DataFrame:
-    return (
-        pl.DataFrame(
-            [
-                {
-                    "state": state,
-                    "action": action,
-                }
-                for state in state_space
-                for action in action_space
-            ]
-        )
-        .with_columns(policy=1.0 / pl.n_unique("action"))
+    action_base_features = np.concat(
+        [
+            np.ones(1),
+            (np.array(action_space)[:-1] == action).astype(float),  # `:-1` to avoid overparametrization
+        ]
     )
+    state_features = np.outer(state_base_features, state_base_features).flatten()
+    state_action_features = np.outer(state_features, action_base_features).flatten()
+    return state_action_features
 
-def sample_from_policy(
-    policy: pl.DataFrame, state: int, seed: int | None | Generator = None
+def init_q_weights(env: Env) -> np.ndarray:
+    state = env.observation_space.sample()
+    action = env.action_space.sample()
+    featurization = featurize(state, action, env.action_space.n)
+    return 0.0 * featurization
+
+def sample_from_eps_greedy_policy(
+    state: np.ndarray, q_weights: np.ndarray, action_space: Iterable, eps: float,
 ) -> int:
-    relevant_policy = (
-        policy
-        .filter(pl.col("state") == state)
-        .sort("action")
+    q = pl.DataFrame(
+        {
+            "action": action_space,
+            "policy": [
+                q_weights @ featurize(state, action, action_space)
+                for action in action_space
+            ],
+        }
     )
-    action = np.random.default_rng(seed).choice(
-        relevant_policy["action"], p=relevant_policy["policy"]
+    policy = (
+        q.with_columns(greedy_choice=pl.col("q") == pl.max("q"))
+        .select(
+            "action",
+            policy=(
+                    (1 - eps) * pl.col("greedy_choice").cast(pl.Float64)
+                    / pl.sum("greedy_choice").over("state")
+                    + eps / pl.len().over("state")
+            ),
+        )
+    )
+    action = np.random.default_rng().choice(
+        policy["action"], p=policy["policy"]
     )
     return int(action)
 
@@ -67,52 +74,27 @@ def learning_rate_for_update(
     numerator = max(1, update_number / period) ** numerator_power
     return base_learning_rate / numerator
 
-def eps_greedy_policy(q: pl.DataFrame, eps: float) -> pl.DataFrame:
-    return (
-        q.with_columns(q_max=pl.max("q").over("state"))
-        .with_columns(greedy_choice=pl.col("q") == pl.col("q_max"),)
-        .select(
-            "state",
-            "action",
-            policy=(
-                (1 - eps) * pl.col("greedy_choice").cast(pl.Float64)
-                / pl.sum("greedy_choice").over("state")
-                + eps / pl.len().over("state")
-            ),
-        )
-    )
-
 def policy_iteration(
-    q_in: pl.DataFrame,
-    policy_in: pl.DataFrame,
+    env: Env,
     evaluation_func: callable,
     gamma: float,
     lr_schedule: Iterable[float],
     eps_schedule: Iterable[float],
+    required_delta: float,
     verbose: bool,
 ) -> tuple[pl.DataFrame, pl.DataFrame]:
-    q = q_in
-    policy = policy_in
+    q_weights = init_q_weights(env)
 
     for eps in eps_schedule:
-        while True:
-            q = evaluation_func(
-                q_in=q, policy=policy, gamma=gamma, lr_schedule=lr_schedule
+        q_weights_delta_norm = np.inf
+        while q_weights_delta_norm >= required_delta:
+            next_q_weights = evaluation_func(
+                q_weights_in=q_weights, eps=eps, gamma=gamma, lr_schedule=lr_schedule, action_space=env.action_space
             )
-            next_policy = eps_greedy_policy(q, eps)
-
-            policy_deltas = (
-                policy
-                .join(next_policy, on=["state", "action"], suffix="_next")
-                .filter(pl.col("policy") != pl.col("policy_next"))
-            )
-            if len(policy_deltas) == 0:
-                break
-
-            policy = next_policy
+            q_weights_delta_norm = np.linalg.norm(next_q_weights - q_weights)
+            q_weights = next_q_weights
             if verbose:
-                print(q.sort(["state", "action"]).pivot(on="action", index="state"))
-                print(policy.sort(["state", "action"]).pivot(on="action", index="state"))
+                print(q_weights)
 
     return q, policy
 
