@@ -164,6 +164,79 @@ q_weights = policy_iteration(
 print(q_weights)
 
 # %%
+# Sarsa(lambda) (with additive traces)
+def sarsa_lambda(
+    q_weights_in: np.ndarray,
+    trace_factor: float,
+    eps: float,
+    gamma: float,
+    lr_schedule: Iterable[float],
+    env: Env,
+) -> np.ndarray:
+    q_weights = q_weights_in.copy()
+    action_space = range(env.action_space.n)
+
+    state, _ = env.reset()
+    action = sample_from_eps_greedy_policy(
+        state, q_weights_in, action_space, eps
+    )
+    trace = np.zeros_like(q_weights)
+    for step, lr in enumerate(lr_schedule):
+        next_state, reward, terminated, truncated, _ = env.step(action)
+        episode_over = terminated or truncated
+
+        if episode_over:
+            target = float(reward)
+        else:
+            next_action = sample_from_eps_greedy_policy(
+                next_state, q_weights_in, action_space, eps
+            )
+            target = (
+                float(reward)
+                + gamma
+                * q_weights @ featurize(
+                    state=next_state, action=next_action, action_space=action_space
+                )
+            )
+
+        state_action_features = featurize(state, action, action_space)
+        trace = gamma * trace_factor * trace + state_action_features
+        q_weights += lr * (target - q_weights @ state_action_features) * trace
+
+        if episode_over:
+            state, _ = env.reset()
+            action = sample_from_eps_greedy_policy(
+                state, q_weights_in, action_space, eps
+            )
+            trace = np.zeros_like(q_weights)
+        else:
+            state = next_state
+            action = next_action
+
+    return q_weights
+
+
+q_weights = policy_iteration(
+    env=env,
+    evaluation_func=sarsa_lambda,
+    gamma=gamma,
+    trace_factor=0.75,
+    lr_schedule=[
+        learning_rate_for_update(
+            base_learning_rate=1e-2,
+            update_number=step,
+            period=100,
+            numerator_power=0.51,
+        )
+        # ~10k to achieve seemingly optimal policy
+        for step in range(10_000)
+    ],
+    eps_schedule=np.linspace(0.5, 0.0, 30),
+    verbose=True,
+)
+print(q_weights)
+
+# %%
 # Run learned policy
 num_episodes = 3
 
