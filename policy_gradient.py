@@ -142,6 +142,64 @@ policy_weights = reinforce(
 print(policy_weights)
 
 # %%
+# REINFORCE with baseline
+# Note: Can also use different learning rates for v_weights and policy_weights
+
+def reinforce_with_baseline(
+    lr_schedule: Iterable[float], gamma: float, env: Env
+) -> np.ndarray:
+    v_weights = init_v_weights(env)
+    policy_weights = init_policy_weights(env)
+    old_v_weights = v_weights.copy()
+    old_policy_weights = policy_weights.copy()
+
+    for episode, lr in tqdm(enumerate(lr_schedule), desc="Running episodes"):
+        state, _ = env.reset()
+        episode_over = False
+        total_return = 0.0
+        factor = 1.0
+        trajectory = []
+        while not episode_over:
+            action, log_probit_grad = (
+                sample_from_policy(state, policy_weights)
+            )
+            trajectory.append((state, log_probit_grad))
+            state, reward, terminated, truncated, _ = env.step(action)
+            total_return += reward
+            factor *= gamma
+            episode_over = terminated or truncated
+        for step, (state, log_probit_grad) in enumerate(trajectory):
+            featurized_state = featurize_state(state)
+            state_error = total_return - v_weights @ featurized_state
+            v_weights += lr * state_error * featurized_state
+            policy_weights += lr * gamma ** step * state_error * log_probit_grad
+        if (episode + 1) % 1000 == 0:
+            print(f"v_weights_delta_norm={np.linalg.norm(v_weights - old_v_weights)}")
+            old_v_weights = v_weights.copy()
+            print(f"policy_weights_delta_norm={np.linalg.norm(policy_weights - old_policy_weights)}")
+            old_policy_weights = policy_weights.copy()
+
+    return policy_weights
+
+
+policy_weights = reinforce_with_baseline(
+    lr_schedule=[
+        learning_rate_for_update(
+            base_learning_rate=1e-2,
+            update_number=step,
+            period=100,
+            numerator_power=0.51,
+        )
+        # ~1k needed to sometimes reach half-decent policy (and sometimes not)
+        # ~10k needed to reach near-optimal policy
+        for step in range(1_000)
+    ],
+    gamma=gamma,
+    env=env,
+)
+print(policy_weights)
+
+# %%
 # Run learned policy
 num_episodes = 3
 
