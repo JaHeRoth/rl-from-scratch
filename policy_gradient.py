@@ -200,6 +200,129 @@ policy_weights = reinforce_with_baseline(
 print(policy_weights)
 
 # %%
+# One-step Actor-Critic
+def one_step_actor_critic(
+    lr_schedule: Iterable[float], gamma: float, env: Env
+) -> np.ndarray:
+    v_weights = init_v_weights(env)
+    policy_weights = init_policy_weights(env)
+    old_v_weights = v_weights.copy()
+    old_policy_weights = policy_weights.copy()
+
+    for episode, lr in tqdm(enumerate(lr_schedule), desc="Running episodes"):
+        factor = 1.0
+        state, _ = env.reset()
+        episode_over = False
+        while not episode_over:
+            action, log_probit_grad = (
+                sample_from_policy(state, policy_weights)
+            )
+            next_state, reward, terminated, truncated, _ = env.step(action)
+            episode_over = terminated or truncated
+
+            if episode_over:
+                target = reward
+            else:
+                target = reward + gamma * v_weights @ featurize_state(state=next_state)
+            featurized_state = featurize_state(state)
+            error = target - v_weights @ featurized_state
+
+            v_weights += lr * error * featurized_state
+            policy_weights += lr * factor * error * log_probit_grad
+
+            factor *= gamma
+            state = next_state
+        if (episode + 1) % 1000 == 0:
+            print(f"v_weights_delta_norm={np.linalg.norm(v_weights - old_v_weights)}")
+            old_v_weights = v_weights.copy()
+            print(f"policy_weights_delta_norm={np.linalg.norm(policy_weights - old_policy_weights)}")
+            old_policy_weights = policy_weights.copy()
+
+    return policy_weights
+
+
+policy_weights = one_step_actor_critic(
+    lr_schedule=[
+        learning_rate_for_update(
+            base_learning_rate=1e-2,
+            update_number=step,
+            period=100,
+            numerator_power=0.51,
+        )
+        # ~1k needed to seemingly learn something
+        # ~10k needed to sometimes reach half-decent and other times reach near-optimal policy
+        for step in range(1_000)
+    ],
+    gamma=gamma,
+    env=env,
+)
+print(policy_weights)
+
+# %%
+# Actor-Critic(lambda) (i.e. with eligibility traces)
+def actor_critic_lambda(
+    lr_schedule: Iterable[float], trace_factor: float, gamma: float, env: Env
+) -> np.ndarray:
+    v_weights = init_v_weights(env)
+    policy_weights = init_policy_weights(env)
+    old_v_weights = v_weights.copy()
+    old_policy_weights = policy_weights.copy()
+
+    for episode, lr in tqdm(enumerate(lr_schedule), desc="Running episodes"):
+        v_trace = np.zeros_like(v_weights)
+        policy_trace = np.zeros_like(policy_weights)
+        factor = 1.0
+        state, _ = env.reset()
+        episode_over = False
+        while not episode_over:
+            action, log_probit_grad = (
+                sample_from_policy(state, policy_weights)
+            )
+            next_state, reward, terminated, truncated, _ = env.step(action)
+            episode_over = terminated or truncated
+
+            if episode_over:
+                target = reward
+            else:
+                target = reward + gamma * v_weights @ featurize_state(state=next_state)
+            featurized_state = featurize_state(state)
+            error = target - v_weights @ featurized_state
+
+            v_trace = gamma * trace_factor * v_trace + featurized_state
+            policy_trace = gamma * trace_factor * policy_trace + log_probit_grad
+            v_weights += lr * error * v_trace
+            policy_weights += lr * factor * error * policy_trace
+
+            factor *= gamma
+            state = next_state
+        if (episode + 1) % 1000 == 0:
+            print(f"v_weights_delta_norm={np.linalg.norm(v_weights - old_v_weights)}")
+            old_v_weights = v_weights.copy()
+            print(f"policy_weights_delta_norm={np.linalg.norm(policy_weights - old_policy_weights)}")
+            old_policy_weights = policy_weights.copy()
+
+    return policy_weights
+
+
+policy_weights = actor_critic_lambda(
+    lr_schedule=[
+        learning_rate_for_update(
+            base_learning_rate=1e-2,
+            update_number=step,
+            period=100,
+            numerator_power=0.51,
+        )
+        # ~1k needed to sometimes reach half-decent policy (and sometimes not)
+        # ~10k needed to sometimes reach half-decent and other times reach near-optimal policy
+        for step in range(1_000)
+    ],
+    trace_factor=0.75,
+    gamma=gamma,
+    env=env,
+)
+print(policy_weights)
+
+# %%
 # Run learned policy
 num_episodes = 3
 
