@@ -249,7 +249,7 @@ for episode in tqdm(range(num_episodes), desc="Running episodes"):
     episode_over = False
     while not episode_over:
         action = sample_from_eps_greedy_policy(
-            state, q _weights, action_space, eps=0.0
+            state, q_weights, action_space, eps=0.0
         )
         state, _, terminated, truncated, _ = human_env.step(action)
         episode_over = terminated or truncated
