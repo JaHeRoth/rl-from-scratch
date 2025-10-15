@@ -89,6 +89,59 @@ def learning_rate_for_update(
     return base_learning_rate / numerator
 
 # %%
+# REINFORCE
+# Note: We'd probably benefit from some regularization, parallelization, batching and feature normalization,
+#  but omitted here for brevity and simplicity
+# Note: We're kind of reinventing the wheel here by using numpy instead of pytorch with its autograd,
+#  but figured it's nice to go as low-level as possible, since we're anyway dealing with very simple networks
+
+def reinforce(
+    lr_schedule: Iterable[float], gamma: float, env: Env
+) -> np.ndarray:
+    policy_weights = init_policy_weights(env)
+    old_policy_weights = policy_weights.copy()
+
+    for episode, lr in tqdm(enumerate(lr_schedule), desc="Running episodes"):
+        state, _ = env.reset()
+        episode_over = False
+        total_return = 0.0
+        factor = 1.0
+        trajectory: list[np.ndarray] = []
+        while not episode_over:
+            action, log_probit_grad = (
+                sample_from_policy(state, policy_weights)
+            )
+            trajectory.append(log_probit_grad)
+            state, reward, terminated, truncated, _ = env.step(action)
+            total_return += reward
+            factor *= gamma
+            episode_over = terminated or truncated
+        for step, log_probit_grad in enumerate(trajectory):
+            policy_weights += lr * gamma ** step * total_return * log_probit_grad
+        if (episode + 1) % 1000 == 0:
+            print(f"policy_weights_delta_norm={np.linalg.norm(policy_weights - old_policy_weights)}")
+            old_policy_weights = policy_weights.copy()
+
+    return policy_weights
+
+
+policy_weights = reinforce(
+    lr_schedule=[
+        learning_rate_for_update(
+            base_learning_rate=1e-2,
+            update_number=step,
+            period=100,
+            numerator_power=0.51,
+        )
+        # ~10k needed to sometimes reach half-decent policy (and sometimes not)
+        for step in range(1_000)
+    ],
+    gamma=gamma,
+    env=env,
+)
+print(policy_weights)
+
+# %%
 # Run learned policy
 num_episodes = 3
 
