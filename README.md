@@ -1,6 +1,6 @@
 # rl-from-scratch
 This repository contains my implementations of most of the algorithms presented in the second edition of
-Sutton & Barto's seminal book _Reinforcement Learning: An Introduction_.
+Sutton & Barto's seminal book [_Reinforcement Learning: An Introduction_](http://incompleteideas.net/book/RLbook2020.pdf).
 
 The motivation for this was a desire to deepen my understanding of these algorithms, and to display how simply many of
 them can be implemented, in hopes of inspiring others.
